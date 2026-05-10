@@ -1,0 +1,6 @@
+{
+  "name": "MySchedule",
+  "description": "Ứng dụng chia sẻ lịch biểu cá nhân và nhóm thời gian thực với Firebase.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

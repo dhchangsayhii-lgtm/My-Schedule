@@ -1,0 +1,65 @@
+{
+  "entities": {
+    "Event": {
+      "title": "Event",
+      "description": "Lịch biểu cá nhân hoặc được chia sẻ",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Tiêu đề sự kiện" },
+        "start": { "type": "string", "format": "date-time", "description": "Thời gian bắt đầu" },
+        "end": { "type": "string", "format": "date-time", "description": "Thời gian kết thúc" },
+        "color": { "type": "string", "enum": ["blue", "pink", "purple"], "description": "Màu sắc hiển thị" },
+        "isShared": { "type": "boolean", "description": "Có chia sẻ công khai hay không" },
+        "sharedNote": { "type": "string", "description": "Ghi chú dành cho người được chia sẻ" },
+        "ownerId": { "type": "string", "description": "UID của người sở hữu" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "start", "end", "ownerId"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "Việc cần làm trong checklist",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Nội dung công việc" },
+        "completed": { "type": "boolean", "description": "Trạng thái hoàn thành" },
+        "date": { "type": "string", "format": "date-time", "description": "Ngày của công việc" },
+        "priority": { "type": "string", "enum": ["low", "medium", "high"] },
+        "tag": { "type": "string", "enum": ["work", "study", "life", "other"], "description": "Nhãn công việc" },
+        "customTagLabel": { "type": "string", "description": "Nhãn tùy chỉnh cho loại Khác" },
+        "isFixed": { "type": "boolean", "description": "Lịch cố định hàng tuần" },
+        "fixedUntil": { "type": "string", "format": "date-time", "description": "Ngày kết thúc lịch cố định" },
+        "isShared": { "type": "boolean", "description": "Chia sẻ lên lịch trình chung" },
+        "sharedNote": { "type": "string", "description": "Ghi chú dành cho người được chia sẻ" },
+        "ownerId": { "type": "string", "description": "UID của người sở hữu" }
+      },
+      "required": ["title", "ownerId", "date"]
+    },
+    "Note": {
+      "title": "Note",
+      "description": "Ghi chú cá nhân",
+      "type": "object",
+      "properties": {
+        "content": { "type": "string", "description": "Nội dung ghi chú" },
+        "date": { "type": "string", "format": "date-time" },
+        "color": { "type": "string" },
+        "ownerId": { "type": "string" }
+      },
+      "required": ["content", "ownerId"]
+    }
+  },
+  "firestore": {
+    "/events/{eventId}": {
+      "schema": "Event",
+      "description": "Tập hợp các sự kiện"
+    },
+    "/tasks/{taskId}": {
+      "schema": "Task",
+      "description": "Tập hợp các công việc"
+    },
+    "/notes/{noteId}": {
+      "schema": "Note",
+      "description": "Tập hợp các ghi chú"
+    }
+  }
+}

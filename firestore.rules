@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(data) {
+      return isSignedIn() && data.ownerId == request.auth.uid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Events
+    match /events/{eventId} {
+      function isValidEvent(data) {
+        return data.title is string && data.title.size() > 0 && data.title.size() <= 200
+          && data.ownerId == request.auth.uid
+          && data.color in ['blue', 'pink', 'purple']
+          && (data.isShared is bool)
+          && (!('sharedNote' in data) || (data.sharedNote is string && data.sharedNote.size() <= 1000))
+          && (!('agenda' in data) || data.agenda is list);
+      }
+
+      allow get: if isOwner(resource.data) || resource.data.isShared == true;
+      allow list: if isOwner(resource.data) || resource.data.isShared == true;
+      
+      allow create: if isSignedIn() && isValidId(eventId) && isValidEvent(request.resource.data);
+      
+      allow update: if (isOwner(resource.data) || (resource.data.isShared == true && isSignedIn()))
+        && isValidEvent(request.resource.data)
+        && request.resource.data.ownerId == resource.data.ownerId; // Immutable owner
+        
+      allow delete: if isOwner(resource.data);
+    }
+
+    // Tasks
+    match /tasks/{taskId} {
+      function isValidTask(data) {
+        return data.title is string && data.title.size() > 0 && data.title.size() <= 500
+          && data.ownerId == request.auth.uid
+          && (data.completed is bool)
+          && data.priority in ['low', 'medium', 'high']
+          && (!('tag' in data) || data.tag in ['work', 'study', 'life', 'other'])
+          && (!('customTagLabel' in data) || (data.customTagLabel is string && data.customTagLabel.size() <= 50))
+          && (!('isFixed' in data) || data.isFixed is bool)
+          && (!('fixedUntil' in data) || (data.fixedUntil is timestamp || data.fixedUntil == null))
+          && (!('isShared' in data) || data.isShared is bool)
+          && (!('sharedNote' in data) || (data.sharedNote is string && data.sharedNote.size() <= 1000))
+          && (!('agenda' in data) || data.agenda is list);
+      }
+
+      allow read: if isOwner(resource.data) || resource.data.isShared == true;
+      allow create: if isSignedIn() && isValidId(taskId) && isValidTask(request.resource.data);
+      allow update: if (isOwner(resource.data) || (resource.data.isShared == true && isSignedIn()))
+        && isValidTask(request.resource.data)
+        && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isOwner(resource.data);
+    }
+
+    // Notes
+    match /notes/{noteId} {
+      function isValidNote(data) {
+        return data.content is string && data.content.size() > 0 && data.content.size() <= 5000
+          && data.ownerId == request.auth.uid;
+      }
+
+      allow read: if isOwner(resource.data);
+      allow create: if isSignedIn() && isValidId(noteId) && isValidNote(request.resource.data);
+      allow update: if isOwner(resource.data) && isValidNote(request.resource.data)
+        && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isOwner(resource.data);
+    }
+  }
+}

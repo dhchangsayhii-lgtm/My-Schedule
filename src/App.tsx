@@ -200,7 +200,18 @@ export default function App() {
   const parseLocalDate = (dateStr: string) => {
     if (!dateStr) return null;
     const [y, m, d] = dateStr.split('-').map(Number);
-    return new Date(y, m - 1, d);
+    if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
+    const date = new Date(y, m - 1, d);
+    return isNaN(date.getTime()) ? null : date;
+  };
+
+  const combineDateAndTime = (dateStr: string, timeStr: string) => {
+    const d = parseLocalDate(dateStr);
+    if (!d) return null;
+    const [h, m] = (timeStr || '00:00').split(':').map(Number);
+    if (!isNaN(h)) d.setHours(h);
+    if (!isNaN(m)) d.setMinutes(m);
+    return d;
   };
 
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -255,6 +266,7 @@ export default function App() {
           id: d.id,
           ...d.data(),
           date: (d.data().date as Timestamp).toDate(),
+          fixedUntil: d.data().fixedUntil ? (d.data().fixedUntil as Timestamp).toDate() : undefined,
         })) as Task[];
         setTasks(data);
       }, (err) => handleFirestoreError(err, OperationType.LIST, 'tasks'));
@@ -318,8 +330,14 @@ export default function App() {
       // If we are in planner or provided a date, try to merge with plannerTime if it exists
       if (activeTab === 'planner' || customDate) {
         if (!customDate) { // only if not explicitly provided
-          finalDate = new Date(plannerDate + 'T' + plannerTime);
+          const combined = combineDateAndTime(plannerDate, plannerTime);
+          if (combined) finalDate = combined;
         }
+      }
+
+      if (!finalDate || isNaN(finalDate.getTime())) {
+        console.error("Invalid finalDate", finalDate);
+        return;
       }
 
       if (editingTask) {
@@ -329,7 +347,7 @@ export default function App() {
           tag: selectedTag,
           customTagLabel: selectedTag === 'other' ? customTagLabel : '',
           isFixed: isFixed,
-          fixedUntil: isFixed && fixedUntilDate ? Timestamp.fromDate(parseLocalDate(fixedUntilDate)!) : null,
+          fixedUntil: isFixed && fixedUntilDate && parseLocalDate(fixedUntilDate) ? Timestamp.fromDate(parseLocalDate(fixedUntilDate)!) : null,
           isShared: isSharedMode || editingTask.isShared || false,
           sharedNote: isSharedMode ? sharedNoteInput : (editingTask.sharedNote || ''),
           agenda: initialAgenda || editingTask.agenda || []
@@ -352,7 +370,7 @@ export default function App() {
         tag: customTag || selectedTag || 'other',
         customTagLabel: (customTag === 'other' || selectedTag === 'other') ? customTagLabel : '',
         isFixed: isFixed,
-        fixedUntil: isFixed && fixedUntilDate ? Timestamp.fromDate(parseLocalDate(fixedUntilDate)!) : null,
+        fixedUntil: isFixed && fixedUntilDate && parseLocalDate(fixedUntilDate) ? Timestamp.fromDate(parseLocalDate(fixedUntilDate)!) : null,
         isShared: isSharedMode || false,
         sharedNote: isSharedMode ? sharedNoteInput : '',
         ownerId: user.uid,
@@ -972,9 +990,9 @@ export default function App() {
               );
 
               const dayItems = [
-                ...dayEvents.map(e => ({ ...e, type: 'event' as const })),
-                ...dayTasksForCalendar.map(t => ({ id: t.id, title: t.title, type: 'task' as const, completed: t.completed, tag: t.tag }))
-              ];
+                ...dayEvents.map(e => ({ ...e, type: 'event' as const, time: e.start })),
+                ...dayTasksForCalendar.map(t => ({ id: t.id, title: t.title, type: 'task' as const, completed: t.completed, tag: t.tag, time: t.date }))
+              ].sort((a, b) => a.time.getTime() - b.time.getTime());
 
               return (
                 <motion.div
@@ -997,21 +1015,21 @@ export default function App() {
                   )}>
                     {format(day, 'd')}
                   </div>
-                  <div className="mt-1 space-y-1 overflow-y-auto max-h-20 scrollbar-hide">
-                    {dayItems.slice(0, 8).map((item, i) => (
-                      <div key={`${item.type}-${item.id}`} className={cn(
-                        "text-[9px] px-1.5 py-0.5 rounded-md font-bold truncate tracking-tight shadow-sm border",
-                        item.type === 'event' 
-                          ? "bg-brand-blue/20 text-brand-blue border-brand-blue/20" 
-                          : item.completed 
-                            ? "bg-slate-100 text-slate-400 border-slate-200"
-                            : "bg-brand-pink/20 text-brand-pink border-brand-pink/20"
-                      )}>
-                        {item.type === 'task' && '• '}{item.title}
-                      </div>
-                    ))}
-                    {dayItems.length > 8 && <div className="text-[7px] font-black text-slate-400 text-center">+{dayItems.length - 8}</div>}
-                  </div>
+                    <div className="mt-1 space-y-1 overflow-y-auto max-h-[70%] scrollbar-hide">
+                      {dayItems.slice(0, 10).map((item, i) => (
+                        <div key={`${item.type}-${item.id}`} className={cn(
+                          "text-[8px] px-1 py-0.5 rounded-md font-bold truncate tracking-tighter shadow-sm border leading-none",
+                          item.type === 'event' 
+                            ? "bg-brand-blue/20 text-brand-blue border-brand-blue/20" 
+                            : item.completed 
+                              ? "bg-slate-100 text-slate-400 border-slate-200"
+                              : "bg-brand-pink/20 text-brand-pink border-brand-pink/20"
+                        )}>
+                          {item.type === 'task' && '• '}{item.title}
+                        </div>
+                      ))}
+                      {dayItems.length > 10 && <div className="text-[7px] font-black text-slate-400 text-center">+{dayItems.length - 10}</div>}
+                    </div>
                   {isSelected && <motion.div layoutId="selection" className="absolute inset-0 border-2 border-slate-900 rounded-2xl pointer-events-none" />}
                 </motion.div>
               );
@@ -1054,22 +1072,32 @@ export default function App() {
         </div>
         <div className="space-y-4">
           <AnimatePresence mode="popLayout">
-            {dayTasks.map(task => (
-              <motion.div layout key={task.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, scale: 0.9 }} className={cn(
-                "flex items-center gap-4 p-4 rounded-2xl border transition-all group",
-                task.completed ? "bg-slate-50 border-slate-100 opacity-60" : "bg-white border-slate-100 shadow-sm"
-              )}>
-                <button 
-                  onClick={() => toggleTask(task)}
-                  className={cn("p-1 transition-all hover:scale-110 active:scale-95", task.completed ? "text-amber-400" : "text-slate-200 hover:text-amber-200")}
-                >
-                  <Star className={cn("w-6 h-6", task.completed ? "fill-amber-400" : "fill-none")} strokeWidth={2.5} />
-                </button>
-                <div className="flex-1">
-                   <div className="text-sm font-bold text-slate-700">
-                     <span className="text-[10px] text-brand-blue font-black mr-2 opacity-50">{format(task.date, 'HH:mm')}</span>
-                     {task.title}
-                   </div>
+            {dayTasks.map(task => {
+              let timeStr = '--:--';
+              try {
+                if (task.date && !isNaN(task.date.getTime())) {
+                  timeStr = format(task.date, 'HH:mm');
+                }
+              } catch (e) {
+                console.error("Invalid task date", task.date);
+              }
+              
+              return (
+                <motion.div layout key={task.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, scale: 0.9 }} className={cn(
+                  "flex items-center gap-4 p-4 rounded-2xl border transition-all group",
+                  task.completed ? "bg-slate-50 border-slate-100 opacity-60" : "bg-white border-slate-100 shadow-sm"
+                )}>
+                  <button 
+                    onClick={() => toggleTask(task)}
+                    className={cn("p-1 transition-all hover:scale-110 active:scale-95", task.completed ? "text-amber-400" : "text-slate-200 hover:text-amber-200")}
+                  >
+                    <Star className={cn("w-6 h-6", task.completed ? "fill-amber-400" : "fill-none")} strokeWidth={2.5} />
+                  </button>
+                  <div className="flex-1">
+                     <div className="text-sm font-bold text-slate-700">
+                       <span className="text-[10px] text-brand-blue font-black mr-2 opacity-50">{timeStr}</span>
+                       {task.title}
+                     </div>
                    {task.tag && (
                      <div className={cn(
                        "inline-block text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md mt-1",
@@ -1095,7 +1123,8 @@ export default function App() {
                   </button>
                 </div>
               </motion.div>
-            ))}
+              );
+            })}
           </AnimatePresence>
           {dayTasks.length === 0 && (
             <div className="text-center py-10">
@@ -1233,7 +1262,12 @@ export default function App() {
                 </button>
                 <div className="flex-1">
                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-800">Lịch cố định</p>
-                   <p className="text-[9px] text-slate-400 font-medium">Tự động lặp lại mỗi tuần.</p>
+                   <p className="text-[9px] text-slate-400 font-medium">Lặp lại mỗi thứ {(() => {
+                     const d = parseLocalDate(plannerDate);
+                     if (!d) return '...';
+                     const dayNames = ['Chủ nhật', 'Hai', 'Ba', 'Tư', 'Năm', 'Sáu', 'Bảy'];
+                     return dayNames[d.getDay()];
+                   })()} hàng tuần.</p>
                 </div>
                 <div className="p-1.5 bg-slate-50 rounded-lg">
                    <Target className="w-3 h-3 text-slate-400" />
@@ -1348,10 +1382,11 @@ export default function App() {
                 />
                 <button 
                   onClick={async () => {
+                     const d = combineDateAndTime(plannerDate, plannerTime) || new Date();
                      if (plannerInputType === 'task') {
-                       addTask(new Date(`${plannerDate}T${plannerTime}`), selectedTag, isSharedItemTask);
+                       addTask(d, selectedTag, isSharedItemTask);
                      } else {
-                       addEvent(new Date(`${plannerDate}T${plannerTime}`), new Date(`${plannerDate}T${plannerTime}`), newTaskTitle, 'blue', isSharedItemTask);
+                       addEvent(d, d, newTaskTitle, 'blue', isSharedItemTask);
                        setNewTaskTitle('');
                      }
                   }}
@@ -1371,27 +1406,41 @@ export default function App() {
 
            <div>
               <div className="mb-10">
-                <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-6">Sự kiện trong ngày ({format(parseLocalDate(plannerDate) || new Date(), 'dd/MM')})</h3>
+                <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-6">
+                  Sự kiện trong ngày ({(() => {
+                    const d = parseLocalDate(plannerDate);
+                    if (d && !isNaN(d.getTime())) return format(d, 'dd/MM');
+                    return '--/--';
+                  })()})
+                </h3>
                 <div className="space-y-3">
-                  {events.filter(e => isSameDay(e.start, parseLocalDate(plannerDate) || new Date())).map(event => (
-                    <div key={event.id} className={cn(
-                      "flex items-center justify-between p-4 rounded-2xl border transition-shadow group shadow-sm",
-                      event.color === 'blue' ? "bg-brand-blue/5 border-brand-blue/10" : "bg-brand-pink/5 border-brand-pink/10"
-                    )}>
-                      <div className="flex items-center gap-3">
-                        <CalendarIcon className="w-4 h-4 text-slate-400" />
-                        <div>
-                          <p className="text-sm font-bold text-slate-700">{event.title}</p>
-                          <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest mt-0.5">
-                            {format(event.start, 'HH:mm')} • Sự kiện
-                          </p>
+                  {(() => {
+                    const d = parseLocalDate(plannerDate);
+                    if (!d || isNaN(d.getTime())) return null;
+                    return events.filter(e => isSameDay(e.start, d)).map(event => (
+                      <div key={event.id} className={cn(
+                        "flex items-center justify-between p-4 rounded-2xl border transition-shadow group shadow-sm",
+                        event.color === 'blue' ? "bg-brand-blue/5 border-brand-blue/10" : "bg-brand-pink/5 border-brand-pink/10"
+                      )}>
+                        <div className="flex items-center gap-3">
+                          <CalendarIcon className="w-4 h-4 text-slate-400" />
+                          <div>
+                            <p className="text-sm font-bold text-slate-700">{event.title}</p>
+                            <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest mt-0.5">
+                              {format(event.start, 'HH:mm')} • Sự kiện
+                            </p>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
-                  {events.filter(e => isSameDay(e.start, parseLocalDate(plannerDate) || new Date())).length === 0 && (
-                    <p className="text-[10px] text-slate-300 italic font-bold uppercase tracking-widest text-center py-4 bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">Không có sự kiện nào...</p>
-                  )}
+                    ));
+                  })()}
+                  {(() => {
+                    const d = parseLocalDate(plannerDate);
+                    if (d && !isNaN(d.getTime()) && events.filter(e => isSameDay(e.start, d)).length === 0) {
+                      return <p className="text-[10px] text-slate-300 italic font-bold uppercase tracking-widest text-center py-4 bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">Không có sự kiện nào...</p>;
+                    }
+                    return null;
+                  })()}
                 </div>
               </div>
 
@@ -1514,7 +1563,13 @@ export default function App() {
         
         {user && !isGuestView && (
           <div className="p-8 border-b border-slate-100 bg-slate-50/50">
-            <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-6">Thêm lịch trình chia sẻ ({sharedDetailDay ? format(sharedDetailDay, 'dd/MM') : format(selectedDate, 'dd/MM')})</h3>
+            <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-6">
+              Thêm lịch trình chia sẻ ({(() => {
+                const d = sharedDetailDay || selectedDate;
+                if (d && !isNaN(d.getTime())) return format(d, 'dd/MM');
+                return '--/--';
+              })()})
+            </h3>
             
             <div className="flex items-center gap-2 mb-6 p-1 bg-slate-200 rounded-2xl w-fit">
               <button 
@@ -1556,7 +1611,10 @@ export default function App() {
                       <input 
                         type="date" 
                         value={format(selectedDate, 'yyyy-MM-dd')}
-                        onChange={(e) => setSelectedDate(new Date(e.target.value))}
+                        onChange={(e) => {
+                          const d = new Date(e.target.value);
+                          if (!isNaN(d.getTime())) setSelectedDate(d);
+                        }}
                         className="w-full bg-white border border-slate-200 rounded-2xl px-5 py-3 text-sm font-bold focus:outline-none"
                       />
                     </div>
@@ -1598,7 +1656,11 @@ export default function App() {
                       </button>
                       <div className="flex-1">
                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-800">Lịch cố định</p>
-                         <p className="text-[9px] text-slate-400 font-medium">Tự động lặp lại mỗi tuần.</p>
+                         <p className="text-[9px] text-slate-400 font-medium">Lặp lại mỗi thứ {(() => {
+                           const d = sharedDetailDay || selectedDate;
+                           const dayNames = ['Chủ nhật', 'Hai', 'Ba', 'Tư', 'Năm', 'Sáu', 'Bảy'];
+                           return dayNames[d.getDay()];
+                         })()} hàng tuần.</p>
                       </div>
                     </div>
 

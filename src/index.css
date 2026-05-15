@@ -20,4 +20,12 @@
     display: grid;
     grid-template-columns: repeat(7, 1fr);
   }
+  
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
 }

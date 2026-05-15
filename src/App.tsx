@@ -13,7 +13,8 @@ import {
   eachDayOfInterval,
   isToday as isDateToday,
   isAfter,
-  startOfToday
+  startOfToday,
+  startOfDay
 } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import { 
@@ -195,6 +196,13 @@ export default function App() {
   const [customTagLabel, setCustomTagLabel] = useState('');
   const [isFixed, setIsFixed] = useState(false);
   const [fixedUntilDate, setFixedUntilDate] = useState<string>('');
+  
+  const parseLocalDate = (dateStr: string) => {
+    if (!dateStr) return null;
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  };
+
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [newNoteContent, setNewNoteContent] = useState('');
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
@@ -321,7 +329,7 @@ export default function App() {
           tag: selectedTag,
           customTagLabel: selectedTag === 'other' ? customTagLabel : '',
           isFixed: isFixed,
-          fixedUntil: isFixed && fixedUntilDate ? Timestamp.fromDate(new Date(fixedUntilDate)) : null,
+          fixedUntil: isFixed && fixedUntilDate ? Timestamp.fromDate(parseLocalDate(fixedUntilDate)!) : null,
           isShared: isSharedMode || editingTask.isShared || false,
           sharedNote: isSharedMode ? sharedNoteInput : (editingTask.sharedNote || ''),
           agenda: initialAgenda || editingTask.agenda || []
@@ -344,7 +352,7 @@ export default function App() {
         tag: customTag || selectedTag || 'other',
         customTagLabel: (customTag === 'other' || selectedTag === 'other') ? customTagLabel : '',
         isFixed: isFixed,
-        fixedUntil: isFixed && fixedUntilDate ? Timestamp.fromDate(new Date(fixedUntilDate)) : null,
+        fixedUntil: isFixed && fixedUntilDate ? Timestamp.fromDate(parseLocalDate(fixedUntilDate)!) : null,
         isShared: isSharedMode || false,
         sharedNote: isSharedMode ? sharedNoteInput : '',
         ownerId: user.uid,
@@ -644,7 +652,7 @@ export default function App() {
   // Checklist Stats
   const dayTasks = tasks.filter(t => 
     isSameDay(t.date, selectedDate) || 
-    (t.isFixed && t.date.getDay() === selectedDate.getDay() && t.date <= selectedDate && (!t.fixedUntil || selectedDate <= t.fixedUntil))
+    (t.isFixed && t.date.getDay() === selectedDate.getDay() && startOfDay(t.date) <= startOfDay(selectedDate) && (!t.fixedUntil || startOfDay(selectedDate) <= startOfDay(t.fixedUntil)))
   ).sort((a, b) => {
     // Sort by time of day
     const timeA = a.date.getHours() * 60 + a.date.getMinutes();
@@ -960,7 +968,7 @@ export default function App() {
               const dayEvents = events.filter(e => isSameDay(e.start, day));
               const dayTasksForCalendar = tasks.filter(t => 
                 isSameDay(t.date, day) || 
-                (t.isFixed && t.date.getDay() === day.getDay() && t.date <= day && (!t.fixedUntil || day <= t.fixedUntil))
+                (t.isFixed && t.date.getDay() === day.getDay() && startOfDay(t.date) <= startOfDay(day) && (!t.fixedUntil || startOfDay(day) <= startOfDay(t.fixedUntil)))
               );
 
               const dayItems = [
@@ -989,8 +997,8 @@ export default function App() {
                   )}>
                     {format(day, 'd')}
                   </div>
-                  <div className="mt-1 space-y-1 overflow-hidden h-12">
-                    {dayItems.slice(0, 3).map((item, i) => (
+                  <div className="mt-1 space-y-1 overflow-y-auto max-h-20 scrollbar-hide">
+                    {dayItems.slice(0, 8).map((item, i) => (
                       <div key={`${item.type}-${item.id}`} className={cn(
                         "text-[9px] px-1.5 py-0.5 rounded-md font-bold truncate tracking-tight shadow-sm border",
                         item.type === 'event' 
@@ -1002,7 +1010,7 @@ export default function App() {
                         {item.type === 'task' && '• '}{item.title}
                       </div>
                     ))}
-                    {dayItems.length > 3 && <div className="text-[7px] font-black text-slate-400 text-center">+{dayItems.length - 3}</div>}
+                    {dayItems.length > 8 && <div className="text-[7px] font-black text-slate-400 text-center">+{dayItems.length - 8}</div>}
                   </div>
                   {isSelected && <motion.div layoutId="selection" className="absolute inset-0 border-2 border-slate-900 rounded-2xl pointer-events-none" />}
                 </motion.div>
@@ -1248,6 +1256,28 @@ export default function App() {
                   <p className="text-[9px] text-slate-400 font-medium px-1 italic">Để trống nếu muốn lặp lại vô thời hạn.</p>
                 </motion.div>
               )}
+
+              <div className="flex items-center gap-3 p-4 bg-white border border-slate-100 rounded-2xl shadow-sm">
+                <button 
+                  onClick={() => setIsSharedItemTask(!isSharedItemTask)}
+                  className={cn(
+                    "w-10 h-6 rounded-full transition-all relative",
+                    isSharedItemTask ? "bg-brand-pink" : "bg-slate-200"
+                  )}
+                >
+                   <div className={cn(
+                     "absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-all",
+                     isSharedItemTask ? "translate-x-4" : "translate-x-0"
+                   )} />
+                </button>
+                <div className="flex-1">
+                   <p className="text-[10px] font-black uppercase tracking-widest text-slate-800">Chia sẻ lịch</p>
+                   <p className="text-[9px] text-slate-400 font-medium">Hiện ở phần Tổng quan chung.</p>
+                </div>
+                <div className="p-1.5 bg-slate-50 rounded-lg">
+                   <Share2 className="w-3 h-3 text-slate-400" />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1293,9 +1323,9 @@ export default function App() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       if (plannerInputType === 'task') {
-                        addTask(new Date(`${plannerDate}T${plannerTime}`), selectedTag);
+                        addTask(new Date(`${plannerDate}T${plannerTime}`), selectedTag, isSharedItemTask);
                       } else {
-                        addEvent(new Date(`${plannerDate}T${plannerTime}`), new Date(`${plannerDate}T${plannerTime}`), newTaskTitle, 'blue');
+                        addEvent(new Date(`${plannerDate}T${plannerTime}`), new Date(`${plannerDate}T${plannerTime}`), newTaskTitle, 'blue', isSharedItemTask);
                         setNewTaskTitle('');
                       }
                     }
@@ -1317,13 +1347,13 @@ export default function App() {
                   )}
                 />
                 <button 
-                  onClick={() => {
-                    if (plannerInputType === 'task') {
-                      addTask(new Date(`${plannerDate}T${plannerTime}`), selectedTag);
-                    } else {
-                      addEvent(new Date(`${plannerDate}T${plannerTime}`), new Date(`${plannerDate}T${plannerTime}`), newTaskTitle, 'blue');
-                      setNewTaskTitle('');
-                    }
+                  onClick={async () => {
+                     if (plannerInputType === 'task') {
+                       addTask(new Date(`${plannerDate}T${plannerTime}`), selectedTag, isSharedItemTask);
+                     } else {
+                       addEvent(new Date(`${plannerDate}T${plannerTime}`), new Date(`${plannerDate}T${plannerTime}`), newTaskTitle, 'blue', isSharedItemTask);
+                       setNewTaskTitle('');
+                     }
                   }}
                   className={cn(
                     "px-8 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl transition-all active:scale-95",
@@ -1334,16 +1364,16 @@ export default function App() {
                         : "bg-brand-blue text-slate-800 hover:bg-brand-blue/80 shadow-brand-blue/20"
                   )}
                 >
-                  {editingTask ? 'Cập Nhật' : 'Lưu Lại'}
+                  {editingTask ? 'Cập Nhật' : 'Lưu vào lịch'}
                 </button>
               </div>
            </div>
 
            <div>
               <div className="mb-10">
-                <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-6">Sự kiện trong ngày ({format(new Date(plannerDate), 'dd/MM')})</h3>
+                <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-6">Sự kiện trong ngày ({format(parseLocalDate(plannerDate) || new Date(), 'dd/MM')})</h3>
                 <div className="space-y-3">
-                  {events.filter(e => isSameDay(e.start, new Date(plannerDate))).map(event => (
+                  {events.filter(e => isSameDay(e.start, parseLocalDate(plannerDate) || new Date())).map(event => (
                     <div key={event.id} className={cn(
                       "flex items-center justify-between p-4 rounded-2xl border transition-shadow group shadow-sm",
                       event.color === 'blue' ? "bg-brand-blue/5 border-brand-blue/10" : "bg-brand-pink/5 border-brand-pink/10"
@@ -1359,7 +1389,7 @@ export default function App() {
                       </div>
                     </div>
                   ))}
-                  {events.filter(e => isSameDay(e.start, new Date(plannerDate))).length === 0 && (
+                  {events.filter(e => isSameDay(e.start, parseLocalDate(plannerDate) || new Date())).length === 0 && (
                     <p className="text-[10px] text-slate-300 italic font-bold uppercase tracking-widest text-center py-4 bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">Không có sự kiện nào...</p>
                   )}
                 </div>
@@ -1382,42 +1412,55 @@ export default function App() {
                 )}
               </div>
               <div className="space-y-3">
-                {tasks.filter(t => !t.completed).sort((a,b) => b.date.getTime() - a.date.getTime()).slice(0, 8).map(task => (
-                  <div key={task.id} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl shadow-sm hover:shadow-md transition-shadow group">
-                    <div className="flex items-center gap-4">
-                      <div className={cn(
-                        "w-2 h-10 rounded-full",
-                        TASK_TAGS.find(t => t.id === task.tag)?.color.split(' ')[0] || "bg-slate-200"
-                      )} />
-                      <div>
-                        <div className="flex items-center gap-2">
-                           <p className="text-sm font-bold text-slate-700">{task.title}</p>
-                           {task.isFixed && <span className="text-[8px] bg-brand-blue/10 text-brand-blue px-1.5 py-0.5 rounded-md font-black uppercase tracking-tighter">Fixed</span>}
+                {(() => {
+                  const dayDate = parseLocalDate(plannerDate) || new Date();
+                  const dayTasksList = tasks.filter(t => 
+                    !t.completed && (
+                      isSameDay(t.date, dayDate) || 
+                      (t.isFixed && t.date.getDay() === dayDate.getDay() && startOfDay(t.date) <= startOfDay(dayDate) && (!t.fixedUntil || startOfDay(dayDate) <= startOfDay(t.fixedUntil)))
+                    )
+                  ).sort((a,b) => b.date.getTime() - a.date.getTime());
+
+                  return dayTasksList.length > 0 ? dayTasksList.map(task => (
+                    <div key={task.id} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl shadow-sm hover:shadow-md transition-shadow group">
+                      <div className="flex items-center gap-4">
+                        <div className={cn(
+                          "w-2 h-10 rounded-full",
+                          TASK_TAGS.find(t => t.id === task.tag)?.color.split(' ')[0] || "bg-slate-200"
+                        )} />
+                        <div>
+                          <div className="flex items-center gap-2">
+                             <p className="text-sm font-bold text-slate-700">{task.title}</p>
+                             {task.isFixed && (
+                               <span className="text-[8px] bg-brand-blue/20 text-brand-blue px-1.5 py-0.5 rounded-md font-black uppercase tracking-tighter flex items-center gap-1">
+                                 Fixed {task.fixedUntil && `đến ${format(task.fixedUntil, 'dd/MM/yy')}`}
+                               </span>
+                             )}
+                          </div>
+                          <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest mt-0.5">
+                            {format(task.date, 'HH:mm')} • {format(task.date, 'dd/MM/yyyy')} • {task.tag === 'other' ? (task.customTagLabel || 'Khác') : TASK_TAGS.find(t => t.id === task.tag)?.label}
+                          </p>
                         </div>
-                        <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest mt-0.5">
-                          {format(task.date, 'HH:mm')} • {format(task.date, 'dd/MM/yyyy')} • {task.tag === 'other' ? (task.customTagLabel || 'Khác') : TASK_TAGS.find(t => t.id === task.tag)?.label}
-                        </p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button 
+                          onClick={() => startEditing(task)}
+                          className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-brand-blue transition-all"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button 
+                          onClick={() => deleteTask(task.id)}
+                          className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-red-500 transition-all"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <button 
-                        onClick={() => startEditing(task)}
-                        className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-brand-blue transition-all"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button 
-                        onClick={() => deleteTask(task.id)}
-                        className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-red-500 transition-all"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                {tasks.filter(t => !t.completed).length === 0 && (
-                  <div className="text-center py-10 opacity-30 italic text-sm">Chưa có kế hoạch nào được lập...</div>
-                )}
+                  )) : (
+                    <div className="text-center py-10 opacity-30 italic text-sm">Chưa có kế hoạch nào được lập cho ngày này...</div>
+                  );
+                })()}
               </div>
            </div>
         </div>
@@ -1536,8 +1579,41 @@ export default function App() {
                     value={sharedNoteInput}
                     onChange={(e) => setSharedNoteInput(e.target.value)}
                     placeholder="Chờ bạn ở chỗ cũ nhé..."
-                    className="w-full bg-white border border-slate-200 rounded-2xl px-5 py-3 text-sm font-medium focus:outline-none h-[116px] resize-none"
+                    className="w-full bg-white border border-slate-200 rounded-2xl px-5 py-3 text-sm font-medium focus:outline-none h-[116px] resize-none mb-4"
                   />
+                  
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-3 p-4 bg-white border border-slate-100 rounded-2xl">
+                      <button 
+                        onClick={() => setIsFixed(!isFixed)}
+                        className={cn(
+                          "w-10 h-6 rounded-full transition-all relative",
+                          isFixed ? "bg-brand-blue" : "bg-slate-200"
+                        )}
+                      >
+                         <div className={cn(
+                           "absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-all",
+                           isFixed ? "translate-x-4" : "translate-x-0"
+                         )} />
+                      </button>
+                      <div className="flex-1">
+                         <p className="text-[10px] font-black uppercase tracking-widest text-slate-800">Lịch cố định</p>
+                         <p className="text-[9px] text-slate-400 font-medium">Tự động lặp lại mỗi tuần.</p>
+                      </div>
+                    </div>
+
+                    {isFixed && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="space-y-2">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block">Đến ngày</label>
+                        <input 
+                          type="date" 
+                          value={fixedUntilDate}
+                          onChange={(e) => setFixedUntilDate(e.target.value)}
+                          className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2 text-xs font-bold focus:outline-none focus:border-brand-blue/50"
+                        />
+                      </motion.div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -1719,7 +1795,6 @@ export default function App() {
                      setAgendaMinutes('');
                      setAgendaDetails('');
                      setAgendaDuration('');
-                     setIsSharedPlannerOpen(false);
                      setActiveItemId(null);
                    } catch (err) {
                      console.error("Error adding shared item:", err);
@@ -1778,7 +1853,7 @@ export default function App() {
                       const daySharedTasksList = allSharedTasks
                         .filter(t => 
                           isSameDay(t.date, sharedDetailDay) || 
-                          (t.isFixed && t.date.getDay() === sharedDetailDay.getDay() && t.date <= sharedDetailDay && (!t.fixedUntil || sharedDetailDay <= t.fixedUntil))
+                          (t.isFixed && (t.date.getDay() === sharedDetailDay.getDay()) && startOfDay(t.date) <= startOfDay(sharedDetailDay) && (!t.fixedUntil || startOfDay(sharedDetailDay) <= startOfDay(t.fixedUntil)))
                         )
                         .sort((a, b) => a.date.getTime() - b.date.getTime());
                       
@@ -1838,9 +1913,11 @@ export default function App() {
             <div className="calendar-grid">
               {calendarDays.map((day, idx) => {
                 const isCurrentMonth = isSameMonth(day, monthStart);
-                const isSelected = isSameDay(day, selectedDate);
                 const daySharedEvents = allSharedEvents.filter(e => isSameDay(e.start, day));
-                const daySharedTasks = allSharedTasks.filter(t => isSameDay(t.date, day));
+                const daySharedTasks = allSharedTasks.filter(t => 
+                  isSameDay(t.date, day) || 
+                  (t.isFixed && t.date.getDay() === day.getDay() && startOfDay(t.date) <= startOfDay(day) && (!t.fixedUntil || startOfDay(day) <= startOfDay(t.fixedUntil)))
+                );
                 
                 const totalTasks = daySharedTasks.length;
                 const completedTasks = daySharedTasks.filter(t => t.completed).length;
@@ -1850,12 +1927,12 @@ export default function App() {
                   <div key={day.toString()} className={cn(
                     "relative aspect-square p-2 border border-slate-50 cursor-pointer group transition-all",
                     !isCurrentMonth && "opacity-20 bg-slate-50/10",
-                    isSelected && "bg-brand-pink/5"
+                    isSameDay(day, selectedDate) && "bg-brand-pink/5"
                   )} onClick={() => { setSelectedDate(day); setSharedDetailDay(day); }}>
                     <div className="flex items-center justify-between mb-1">
                       <div className={cn(
                         "w-6 h-6 flex items-center justify-center rounded-lg text-[10px] font-black tracking-tight",
-                        isDateToday(day) ? "bg-brand-blue text-slate-800" : isSelected ? "bg-brand-pink text-slate-800" : "text-slate-400"
+                        isDateToday(day) ? "bg-brand-blue text-slate-800" : isSameDay(day, selectedDate) ? "bg-brand-pink text-slate-800" : "text-slate-400"
                       )}>
                         {format(day, 'd')}
                       </div>
@@ -1865,7 +1942,7 @@ export default function App() {
                         </div>
                       )}
                     </div>
-                    <div className="space-y-1">
+                    <div className="space-y-1 overflow-y-auto max-h-24 scrollbar-hide">
                       {(() => {
                         const dayItems = [
                           ...daySharedEvents.map(e => ({ ...e, type: 'EV', time: e.start })),
@@ -1874,16 +1951,16 @@ export default function App() {
                         
                         return (
                           <>
-                            {dayItems.slice(0, 3).map((item, i) => (
+                            {dayItems.slice(0, 8).map((item, i) => (
                               <div key={i} className={cn(
-                                "text-[7px] p-0.5 px-1 rounded-sm font-bold truncate shadow-sm text-white",
-                                item.type === 'EV' ? "bg-brand-pink" : "bg-brand-blue",
-                                (item as any).completed && "line-through opacity-50"
+                                "text-[9px] p-1 px-1.5 rounded-md font-black truncate shadow-sm text-slate-900 border",
+                                item.type === 'EV' ? "bg-brand-pink border-brand-pink/30" : "bg-brand-blue border-brand-blue/30",
+                                (item as any).completed && "line-through opacity-50 bg-slate-100 border-slate-200 text-slate-400"
                               )}>
                                 {item.type}: {item.title}
                               </div>
                             ))}
-                            {dayItems.length > 3 && <div className="text-[6px] text-center text-slate-300 font-bold">+{dayItems.length - 3}</div>}
+                            {dayItems.length > 8 && <div className="text-[8px] text-center text-slate-400 font-bold">+{dayItems.length - 8}</div>}
                           </>
                         );
                       })()}
@@ -1907,7 +1984,10 @@ export default function App() {
                   const weekDaysArr = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
                   return weekDaysArr.map(day => {
                     const dayEvents = allSharedEvents.filter(e => isSameDay(e.start, day));
-                    const dayTasks = allSharedTasks.filter(t => isSameDay(t.date, day));
+                    const dayTasks = allSharedTasks.filter(t => 
+                      isSameDay(t.date, day) || 
+                      (t.isFixed && t.date.getDay() === day.getDay() && startOfDay(t.date) <= startOfDay(day) && (!t.fixedUntil || startOfDay(day) <= startOfDay(t.fixedUntil)))
+                    );
                     const sortedItems = [
                       ...dayEvents.map(e => ({ ...e, type: 'EV' as const, time: e.start })),
                       ...dayTasks.map(t => ({ ...t, type: 'TK' as const, time: t.date }))
@@ -2040,7 +2120,7 @@ export default function App() {
                 const todayTasks = tasks.filter(t => 
                   !isGuestView && (
                     isSameDay(t.date, today) || 
-                    (t.isFixed && t.date.getDay() === today.getDay() && t.date <= today && (!t.fixedUntil || today <= t.fixedUntil))
+                    (t.isFixed && t.date.getDay() === today.getDay() && startOfDay(t.date) <= startOfDay(today) && (!t.fixedUntil || startOfDay(today) <= startOfDay(t.fixedUntil)))
                   )
                 );
                 const todayEvents = events.filter(e => isSameDay(e.start, today) && (!isGuestView || e.isShared));
@@ -2086,12 +2166,37 @@ export default function App() {
             <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><Plus className="w-5 h-5 text-brand-pink" /><span>Sắp diễn ra</span></h2>
             <div className="space-y-3">
               {(() => {
-                const upcomingTasks = isGuestView ? [] : tasks.filter(t => !t.completed && (isAfter(t.date, startOfToday()) || (t.isFixed && (!t.fixedUntil || isAfter(t.fixedUntil, startOfToday())))));
-                const upcomingEvents = events.filter(e => isAfter(e.start, startOfToday()) && (!isGuestView || e.isShared));
-                const combined = [
-                  ...upcomingEvents.map(e => ({ ...e, type: 'event' as const, date: e.start })),
-                  ...upcomingTasks.map(t => ({ ...t, type: 'task' as const, date: t.date }))
-                ].sort((a,b) => a.date.getTime() - b.date.getTime()).slice(0, 5);
+                const today = startOfToday();
+                // For regular items, just future ones. 
+                // For fixed items, find the next occurrence relative to today.
+                const nextOccurrences: { id: string, title: string, type: 'task' | 'event', date: Date, color?: string }[] = [];
+
+                events.forEach(e => {
+                  if (isAfter(e.start, today) || isSameDay(e.start, today)) {
+                    nextOccurrences.push({ ...e, type: 'event', date: e.start });
+                  }
+                });
+
+                tasks.forEach(t => {
+                   if (!t.completed) {
+                     if (isAfter(t.date, today) || isSameDay(t.date, today)) {
+                       nextOccurrences.push({ ...t, type: 'task', date: t.date });
+                     } else if (t.isFixed) {
+                       // If in past, find next occurrence
+                       let next = t.date;
+                       while (next < today) {
+                         next = addDays(next, 7);
+                       }
+                       if (!t.fixedUntil || startOfDay(next) <= startOfDay(t.fixedUntil)) {
+                         nextOccurrences.push({ ...t, type: 'task', date: next });
+                       }
+                     }
+                   }
+                });
+
+                const combined = nextOccurrences
+                  .sort((a,b) => a.date.getTime() - b.date.getTime())
+                  .slice(0, 6);
 
                 return combined.map(item => (
                   <motion.div key={`${item.type}-${item.id}`} whileHover={{ x: 4 }} className={cn(

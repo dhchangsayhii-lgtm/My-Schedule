@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Fragment } from 'react';
 import { 
   format, 
   addMonths, 
@@ -13,6 +13,7 @@ import {
   eachDayOfInterval,
   isToday as isDateToday,
   isAfter,
+  isBefore,
   startOfToday,
   startOfDay
 } from 'date-fns';
@@ -115,23 +116,6 @@ const TASK_TAGS: { id: TaskTag, label: string, color: string }[] = [
   { id: 'other', label: 'Khác', color: 'bg-slate-400 text-white' },
 ];
 
-interface Attachment {
-  id: string;
-  url: string;
-  name: string;
-  type: 'docs' | 'sheet' | 'link' | 'other';
-  comment?: string;
-}
-
-interface AgendaItem {
-  id: string;
-  text: string;
-  completed: boolean;
-  duration?: string;
-  details?: string;
-  attachments?: Attachment[];
-}
-
 interface Event {
   id: string;
   title: string;
@@ -140,7 +124,7 @@ interface Event {
   color: 'blue' | 'pink' | 'purple';
   isShared: boolean;
   sharedNote?: string;
-  agenda?: AgendaItem[];
+  sharingRoom?: string;
   ownerId: string;
 }
 
@@ -156,8 +140,9 @@ interface Task {
   fixedUntil?: Date;
   isShared?: boolean;
   sharedNote?: string;
-  agenda?: AgendaItem[];
+  sharingRoom?: string;
   ownerId: string;
+  completedDates?: string[];
 }
 
 interface Note {
@@ -176,6 +161,8 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [isFirebasePromptVisible, setIsFirebasePromptVisible] = useState(false);
   const [isGuestView, setIsGuestView] = useState(false);
+  const [sharingRoom, setSharingRoom] = useState<string>('');
+  const [roomInput, setRoomInput] = useState('');
   const [sharedCalendarView, setSharedCalendarView] = useState<'month' | 'week'>('month');
   const [sharedNoteInput, setSharedNoteInput] = useState('');
   const [isSharedItemTask, setIsSharedItemTask] = useState(false);
@@ -215,21 +202,10 @@ export default function App() {
   };
 
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editingEvent, setEditingEvent] = useState<Event | null>(null);
   const [newNoteContent, setNewNoteContent] = useState('');
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
   const [newEventTitle, setNewEventTitle] = useState('');
-  const [agendaInput, setAgendaInput] = useState('');
-  const [agendaDuration, setAgendaDuration] = useState('');
-  const [agendaHours, setAgendaHours] = useState('');
-  const [agendaMinutes, setAgendaMinutes] = useState('');
-  const [agendaDetails, setAgendaDetails] = useState('');
-  const [activeItemId, setActiveItemId] = useState<string | null>(null);
-  const [editingAgendaId, setEditingAgendaId] = useState<string | null>(null);
-  const [attachingToId, setAttachingToId] = useState<string | null>(null);
-  const [tempAgenda, setTempAgenda] = useState<AgendaItem[]>([]);
-  const [newAttName, setNewAttName] = useState('');
-  const [newAttUrl, setNewAttUrl] = useState('');
-  const [newAttType, setNewAttType] = useState<'docs' | 'sheet' | 'link' | 'other'>('link');
 
   // Handle Auth
   useEffect(() => {
@@ -290,9 +266,13 @@ export default function App() {
     }
   }, [user]);
 
-  // Sync Shared Events (Always active)
+  // Sync Shared Events based on Room
   useEffect(() => {
-    const qShared = query(collection(db, 'events'), where('isShared', '==', true));
+    if (!sharingRoom) {
+      setAllSharedEvents([]);
+      return;
+    }
+    const qShared = query(collection(db, 'events'), where('sharingRoom', '==', sharingRoom));
     const unsubscribeShared = onSnapshot(qShared, (snapshot) => {
       const data = snapshot.docs.map(d => ({
         id: d.id,
@@ -303,11 +283,15 @@ export default function App() {
       setAllSharedEvents(data);
     }, (err) => handleFirestoreError(err, OperationType.LIST, 'events'));
     return () => unsubscribeShared();
-  }, []);
+  }, [sharingRoom]);
 
-  // Sync Shared Tasks (Always active)
+  // Sync Shared Tasks based on Room
   useEffect(() => {
-    const qSharedTasks = query(collection(db, 'tasks'), where('isShared', '==', true));
+    if (!sharingRoom) {
+      setAllSharedTasks([]);
+      return;
+    }
+    const qSharedTasks = query(collection(db, 'tasks'), where('sharingRoom', '==', sharingRoom));
     const unsubscribeSharedTasks = onSnapshot(qSharedTasks, (snapshot) => {
       const data = snapshot.docs.map(d => ({
         id: d.id,
@@ -318,10 +302,10 @@ export default function App() {
       setAllSharedTasks(data);
     }, (err) => handleFirestoreError(err, OperationType.LIST, 'tasks'));
     return () => unsubscribeSharedTasks();
-  }, []);
+  }, [sharingRoom]);
 
   // Firestore Actions
-  const addTask = async (customDate?: Date, customTag?: TaskTag, isSharedMode?: boolean, customTitle?: string, initialAgenda?: AgendaItem[]) => {
+  const addTask = async (customDate?: Date, customTag?: TaskTag, isSharedMode?: boolean, customTitle?: string) => {
     const title = customTitle || newTaskTitle;
     if (!user || !title.trim()) return;
     try {
@@ -350,7 +334,6 @@ export default function App() {
           fixedUntil: isFixed && fixedUntilDate && parseLocalDate(fixedUntilDate) ? Timestamp.fromDate(parseLocalDate(fixedUntilDate)!) : null,
           isShared: isSharedMode || editingTask.isShared || false,
           sharedNote: isSharedMode ? sharedNoteInput : (editingTask.sharedNote || ''),
-          agenda: initialAgenda || editingTask.agenda || []
         });
         setEditingTask(null);
         setNewTaskTitle('');
@@ -358,7 +341,6 @@ export default function App() {
         setFixedUntilDate('');
         setCustomTagLabel('');
         setSharedNoteInput('');
-        setTempAgenda([]);
         return;
       }
 
@@ -372,17 +354,16 @@ export default function App() {
         isFixed: isFixed,
         fixedUntil: isFixed && fixedUntilDate && parseLocalDate(fixedUntilDate) ? Timestamp.fromDate(parseLocalDate(fixedUntilDate)!) : null,
         isShared: isSharedMode || false,
-        sharedNote: isSharedMode ? sharedNoteInput : '',
+        sharingRoom: isSharedMode ? sharingRoom : null,
+        sharedNote: sharedNoteInput,
         ownerId: user.uid,
         createdAt: serverTimestamp(),
-        agenda: initialAgenda || []
       });
       setNewTaskTitle('');
       setCustomTagLabel('');
       setIsFixed(false);
       setFixedUntilDate('');
       setSharedNoteInput('');
-      setTempAgenda([]);
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'tasks');
     }
@@ -397,138 +378,49 @@ export default function App() {
     setCustomTagLabel(task.customTagLabel || '');
     setIsFixed(task.isFixed || false);
     setFixedUntilDate(task.fixedUntil ? format(task.fixedUntil, 'yyyy-MM-dd') : '');
+    setSharedNoteInput(task.sharedNote || '');
     setPlannerInputType('task');
     setActiveTab('planner');
   };
 
-  const toggleTask = async (task: Task) => {
+  const startEditingEvent = (event: Event) => {
+    setEditingEvent(event);
+    setNewTaskTitle(event.title);
+    setPlannerDate(format(event.start, 'yyyy-MM-dd'));
+    setPlannerTime(format(event.start, 'HH:mm'));
+    setSharedNoteInput(event.sharedNote || '');
+    setPlannerInputType('event');
+    setActiveTab('planner');
+  };
+
+  const isTaskCompleted = (task: Task, date: Date) => {
+    if (task.isFixed) {
+      const dateStr = format(date, 'yyyy-MM-dd');
+      return task.completedDates?.includes(dateStr) || false;
+    }
+    return task.completed;
+  };
+
+  const toggleTask = async (task: Task, specificDate?: Date) => {
     if (!user) return;
     try {
-      await updateDoc(doc(db, 'tasks', task.id), {
-        completed: !task.completed
-      });
+      if (task.isFixed && specificDate) {
+        const dateStr = format(specificDate, 'yyyy-MM-dd');
+        const currentDates = task.completedDates || [];
+        const newDates = currentDates.includes(dateStr)
+          ? currentDates.filter(d => d !== dateStr)
+          : [...currentDates, dateStr];
+        
+        await updateDoc(doc(db, 'tasks', task.id), {
+          completedDates: newDates
+        });
+      } else {
+        await updateDoc(doc(db, 'tasks', task.id), {
+          completed: !task.completed
+        });
+      }
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `tasks/${task.id}`);
-    }
-  };
-
-  const addAgendaItem = async (itemId: string, itemType: 'task' | 'event') => {
-    if (!agendaInput.trim()) return;
-    
-    let durationStr = '';
-    if (agendaHours || agendaMinutes) {
-      if (agendaHours) durationStr += `${agendaHours}h `;
-      if (agendaMinutes) durationStr += `${agendaMinutes}p`;
-    }
-    durationStr = durationStr.trim() || agendaDuration;
-
-    const newItem: AgendaItem = { 
-      id: crypto.randomUUID(), 
-      text: agendaInput.trim(), 
-      duration: durationStr || undefined,
-      details: agendaDetails || undefined,
-      completed: false,
-      attachments: []
-    };
-    const collectionName = itemType === 'task' ? 'tasks' : 'events';
-    const targetItem = itemType === 'task' ? allSharedTasks.concat(tasks).find(t => t.id === itemId) : allSharedEvents.concat(events).find(e => e.id === itemId);
-    
-    if (!targetItem) return;
-
-    try {
-      await updateDoc(doc(db, collectionName, itemId), {
-        agenda: [...(targetItem.agenda || []), newItem]
-      });
-      setAgendaInput('');
-      setAgendaDuration('');
-      setAgendaHours('');
-      setAgendaMinutes('');
-      setAgendaDetails('');
-      setActiveItemId(null);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `${collectionName}/${itemId}`);
-    }
-  };
-
-  const addAttachment = async (itemId: string, itemType: 'task' | 'event', agendaId: string, attachment: Omit<Attachment, 'id'>) => {
-    const collectionName = itemType === 'task' ? 'tasks' : 'events';
-    const targetItem = itemType === 'task' ? allSharedTasks.concat(tasks).find(t => t.id === itemId) : allSharedEvents.concat(events).find(e => e.id === itemId);
-    
-    if (!targetItem || !targetItem.agenda) return;
-
-    const newAgenda = targetItem.agenda.map(item => {
-      if (item.id === agendaId) {
-        return {
-          ...item,
-          attachments: [...(item.attachments || []), { ...attachment, id: crypto.randomUUID() }]
-        };
-      }
-      return item;
-    });
-
-    try {
-      await updateDoc(doc(db, collectionName, itemId), { agenda: newAgenda });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `${collectionName}/${itemId}`);
-    }
-  };
-
-  const updateAttachmentComment = async (itemId: string, itemType: 'task' | 'event', agendaId: string, attachmentId: string, comment: string) => {
-    const collectionName = itemType === 'task' ? 'tasks' : 'events';
-    const targetItem = itemType === 'task' ? allSharedTasks.concat(tasks).find(t => t.id === itemId) : allSharedEvents.concat(events).find(e => e.id === itemId);
-    
-    if (!targetItem || !targetItem.agenda) return;
-
-    const newAgenda = targetItem.agenda.map(item => {
-      if (item.id === agendaId) {
-        return {
-          ...item,
-          attachments: item.attachments?.map(att => att.id === attachmentId ? { ...att, comment } : att)
-        };
-      }
-      return item;
-    });
-
-    try {
-      await updateDoc(doc(db, collectionName, itemId), { agenda: newAgenda });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `${collectionName}/${itemId}`);
-    }
-  };
-
-  const toggleAgendaItem = async (itemId: string, itemType: 'task' | 'event', agendaId: string) => {
-    const collectionName = itemType === 'task' ? 'tasks' : 'events';
-    const targetItem = itemType === 'task' ? allSharedTasks.concat(tasks).find(t => t.id === itemId) : allSharedEvents.concat(events).find(e => e.id === itemId);
-    
-    if (!targetItem || !targetItem.agenda) return;
-
-    const newAgenda = targetItem.agenda.map(item => 
-      item.id === agendaId ? { ...item, completed: !item.completed } : item
-    );
-
-    try {
-      await updateDoc(doc(db, collectionName, itemId), {
-        agenda: newAgenda
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `${collectionName}/${itemId}`);
-    }
-  };
-
-  const deleteAgendaItem = async (itemId: string, itemType: 'task' | 'event', agendaId: string) => {
-    const collectionName = itemType === 'task' ? 'tasks' : 'events';
-    const targetItem = itemType === 'task' ? allSharedTasks.concat(tasks).find(t => t.id === itemId) : allSharedEvents.concat(events).find(e => e.id === itemId);
-    
-    if (!targetItem || !targetItem.agenda) return;
-
-    const newAgenda = targetItem.agenda.filter(item => item.id !== agendaId);
-
-    try {
-      await updateDoc(doc(db, collectionName, itemId), {
-        agenda: newAgenda
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `${collectionName}/${itemId}`);
     }
   };
 
@@ -557,7 +449,7 @@ export default function App() {
     }
   };
 
-  const addEvent = async (customStart?: Date, customEnd?: Date, customTitle?: string, customColor?: 'blue' | 'pink' | 'purple', isSharedView?: boolean, initialAgenda?: AgendaItem[]) => {
+  const addEvent = async (customStart?: Date, customEnd?: Date, customTitle?: string, customColor?: 'blue' | 'pink' | 'purple', isSharedView?: boolean) => {
     const title = customTitle || newEventTitle;
     if (!user || !title.trim()) return;
     try {
@@ -567,15 +459,14 @@ export default function App() {
         end: Timestamp.fromDate(customEnd || customStart || selectedDate),
         color: customColor || 'pink',
         isShared: isSharedView || false,
-        sharedNote: isSharedView ? sharedNoteInput : '',
+        sharingRoom: isSharedView ? sharingRoom : null,
+        sharedNote: sharedNoteInput,
         ownerId: user.uid,
         createdAt: serverTimestamp(),
-        agenda: initialAgenda || []
       });
       setNewEventTitle('');
       setSharedNoteInput('');
       setIsEventModalOpen(false);
-      setTempAgenda([]);
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'events');
     }
@@ -590,62 +481,16 @@ export default function App() {
     }
   };
 
-  const addToTempAgenda = () => {
-    if (!agendaInput.trim()) return;
-
-    let durationStr = '';
-    if (agendaHours || agendaMinutes) {
-      if (agendaHours) durationStr += `${agendaHours}h `;
-      if (agendaMinutes) durationStr += `${agendaMinutes}p`;
-    }
-    durationStr = durationStr.trim() || agendaDuration;
-
-    const newItem: AgendaItem = {
-      id: crypto.randomUUID(),
-      text: agendaInput.trim(),
-      duration: durationStr || undefined,
-      details: agendaDetails || undefined,
-      completed: false,
-      attachments: []
-    };
-    setTempAgenda([...tempAgenda, newItem]);
-    setAgendaInput('');
-    setAgendaHours('');
-    setAgendaMinutes('');
-    setAgendaDetails('');
-    setAgendaDuration('');
-  };
-
-  const addAttachmentToTempAgenda = (agendaId: string, attachment: Omit<Attachment, 'id'>) => {
-    setTempAgenda(tempAgenda.map(item => {
-      if (item.id === agendaId) {
-        return {
-          ...item,
-          attachments: [...(item.attachments || []), { ...attachment, id: crypto.randomUUID() }]
-        };
-      }
-      return item;
-    }));
-  };
-
-  const updateTempAttachmentComment = (agendaId: string, attachmentId: string, comment: string) => {
-    setTempAgenda(tempAgenda.map(item => {
-      if (item.id === agendaId) {
-        return {
-          ...item,
-          attachments: item.attachments?.map(att => att.id === attachmentId ? { ...att, comment } : att)
-        };
-      }
-      return item;
-    }));
-  };
-
-  // Check URL for guest view
+  // Check URL for guest view or shared room
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('view') === 'guest') {
+    const view = params.get('view');
+    const room = params.get('room');
+    
+    if (view === 'guest' || view === 'shared') {
       setIsGuestView(true);
       setActiveTab('shared');
+      if (room) setSharingRoom(room);
     }
   }, []);
 
@@ -677,7 +522,9 @@ export default function App() {
     const timeB = b.date.getHours() * 60 + b.date.getMinutes();
     return timeA - timeB;
   });
-  const completedCount = dayTasks.filter(t => t.completed).length;
+  const dayEvents = events.filter(e => isSameDay(e.start, selectedDate)).sort((a, b) => a.start.getTime() - b.start.getTime());
+  
+  const completedCount = dayTasks.filter(t => isTaskCompleted(t, selectedDate)).length;
   const progressData = useMemo(() => {
     return [
       { name: 'Xong', value: completedCount, color: '#F9A8C4' },
@@ -727,231 +574,6 @@ export default function App() {
     );
   }
 
-  const renderAgendaTable = (itemId: string, itemType: 'task' | 'event', agenda: AgendaItem[], ownerId: string, showAddButton: boolean = true) => {
-    const isOwner = user?.uid === ownerId;
-    const accentColor = itemType === 'task' ? 'brand-blue' : 'brand-pink';
-
-    return (
-      <div className="mt-4 overflow-x-auto rounded-xl border border-slate-100 bg-white shadow-sm">
-        <table className="w-full text-[10px] text-left border-collapse">
-          <thead>
-            <tr className={cn("border-b border-slate-50", itemType === 'task' ? "bg-brand-blue/5" : "bg-brand-pink/5")}>
-              <th className="px-3 py-2 font-black uppercase tracking-widest text-slate-400 w-10">STT</th>
-              <th className="px-3 py-2 font-black uppercase tracking-widest text-slate-400 w-24"><div className="flex items-center gap-1"><Clock className="w-3 h-3" /> Thời lượng</div></th>
-              <th className="px-3 py-2 font-black uppercase tracking-widest text-slate-400 min-w-[120px]"><div className="flex items-center gap-1"><List className="w-3 h-3" /> Công việc</div></th>
-              <th className="px-3 py-2 font-black uppercase tracking-widest text-slate-400 min-w-[150px]">Chi tiết</th>
-              <th className="px-3 py-2 font-black uppercase tracking-widest text-slate-400">Đính kèm</th>
-              {isOwner && showAddButton && <th className="px-3 py-2 w-10"></th>}
-            </tr>
-          </thead>
-          <tbody>
-            {agenda?.map((item, index) => (
-              <tr key={item.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors group/row">
-                <td className="px-3 py-3 text-slate-400 font-bold">{index + 1}</td>
-                <td className="px-3 py-3 font-medium text-slate-600">{item.duration || '-'}</td>
-                <td className="px-3 py-3">
-                  <div className="flex items-center gap-2">
-                    <button 
-                      onClick={() => toggleAgendaItem(itemId, itemType, item.id)}
-                      className={cn(
-                        "w-4 h-4 flex items-center justify-center transition-all shrink-0",
-                        item.completed ? `text-amber-400 scale-110` : "text-slate-300 hover:text-amber-200"
-                      )}
-                    >
-                      <Star className={cn("w-4 h-4", item.completed ? "fill-amber-400" : "fill-none")} strokeWidth={2.5} />
-                    </button>
-                    <span className={cn("font-bold text-slate-800", item.completed && "line-through opacity-50")}>{item.text}</span>
-                  </div>
-                </td>
-                <td className="px-3 py-3">
-                   <p className="text-slate-500 line-clamp-2">{item.details || '-'}</p>
-                </td>
-                <td className="px-3 py-3">
-                  <div className="space-y-1">
-                    {item.attachments?.map(att => (
-                      <div key={att.id} className="group/att">
-                        <div className="flex items-center gap-2">
-                           <a 
-                             href={att.url} 
-                             target="_blank" 
-                             rel="noopener noreferrer" 
-                             className={cn("flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[8px] font-bold transition-all", 
-                               att.type === 'docs' ? "bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-100" :
-                               att.type === 'sheet' ? "bg-green-50 border-green-100 text-green-600 hover:bg-green-100" :
-                               "bg-slate-50 border-slate-100 text-slate-600 hover:bg-slate-100"
-                             )}
-                           >
-                             {att.type === 'docs' && <Paperclip className="w-2.5 h-2.5" />}
-                             {att.type === 'sheet' && <List className="w-2.5 h-2.5" />}
-                             <span className="truncate max-w-[80px]">{att.name}</span>
-                             <ExternalLink className="w-2 h-2 opacity-50" />
-                           </a>
-                           {att.comment && (
-                             <div className="text-[7px] text-slate-400 flex items-center gap-1 max-w-[100px] truncate">
-                               <MessageSquare className="w-2 h-2" /> {att.comment}
-                             </div>
-                           )}
-                           {isOwner && showAddButton && (
-                             <button 
-                               onClick={() => {
-                                 const cmt = prompt('Nhập comment cho tệp đính kèm:', att.comment || '');
-                                 if (cmt !== null) updateAttachmentComment(itemId, itemType, item.id, att.id, cmt);
-                               }}
-                               className="opacity-0 group-hover/att:opacity-100 p-1 text-slate-300 hover:text-brand-blue"
-                             >
-                               <MessageSquare className="w-2.5 h-2.5" />
-                             </button>
-                           )}
-                        </div>
-                      </div>
-                    ))}
-                    {isOwner && showAddButton && (
-                      attachingToId === item.id ? (
-                        <div className="p-2 space-y-2 bg-slate-50 rounded-lg animate-in fade-in slide-in-from-top-1">
-                          <input 
-                            type="text" 
-                            placeholder="Tên tệp..." 
-                            className="w-full p-1 bg-white border border-slate-200 rounded text-[8px]" 
-                            value={newAttName} 
-                            onChange={(e) => setNewAttName(e.target.value)}
-                          />
-                          <input 
-                            type="text" 
-                            placeholder="URL (link, docs, sheet...)" 
-                            className="w-full p-1 bg-white border border-slate-200 rounded text-[8px]" 
-                            value={newAttUrl} 
-                            onChange={(e) => setNewAttUrl(e.target.value)}
-                          />
-                          <div className="flex gap-1">
-                            {(['link', 'docs', 'sheet'] as const).map(t => (
-                              <button 
-                                key={t}
-                                onClick={() => setNewAttType(t)}
-                                className={cn("px-1.5 py-0.5 rounded text-[7px] font-black uppercase",
-                                  newAttType === t ? `bg-${accentColor} text-white` : "bg-white text-slate-400 border border-slate-100"
-                                )}
-                              >
-                                {t}
-                              </button>
-                            ))}
-                          </div>
-                          <div className="flex gap-1">
-                            <button 
-                              onClick={async () => {
-                                if (!newAttName || !newAttUrl) return;
-                                await addAttachment(itemId, itemType, item.id, { 
-                                  name: newAttName, 
-                                  url: newAttUrl, 
-                                  type: newAttType 
-                                });
-                                setNewAttName('');
-                                setNewAttUrl('');
-                                setAttachingToId(null);
-                              }}
-                              className={cn("flex-1 py-1 rounded text-white font-bold", `bg-${accentColor}`)}
-                            >
-                              Lưu
-                            </button>
-                            <button onClick={() => setAttachingToId(null)} className="px-2 py-1 bg-slate-200 text-slate-500 rounded font-bold">Hủy</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <button 
-                          onClick={() => setAttachingToId(item.id)} 
-                          className="text-[9px] text-slate-400 hover:text-brand-blue font-black flex items-center gap-1 uppercase tracking-widest bg-slate-50 border border-slate-100 px-2 py-1 rounded-md transition-all hover:border-slate-200"
-                        >
-                          <Plus className="w-3 h-3" /> Tệp
-                        </button>
-                      )
-                    )}
-                  </div>
-                </td>
-                {isOwner && showAddButton && (
-                  <td className="px-3 py-3">
-                    <button onClick={() => deleteAgendaItem(itemId, itemType, item.id)} className="opacity-0 group-hover/row:opacity-100 text-slate-300 hover:text-red-500 transition-opacity">
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </td>
-                )}
-              </tr>
-            ))}
-
-            {isOwner && showAddButton && activeItemId === itemId && (
-              <tr className="bg-slate-50/50">
-                <td className="px-3 py-4"></td>
-                <td className="px-3 py-4">
-                  <div className="flex items-center gap-0.5">
-                    <input 
-                      type="number" 
-                      placeholder="H" 
-                      min="0"
-                      className="w-7 bg-white border border-slate-200 rounded-lg px-1 py-1 text-[10px] font-bold focus:outline-none"
-                      value={agendaHours}
-                      onChange={(e) => setAgendaHours(e.target.value)}
-                    />
-                    <span className="text-[8px] text-slate-400 font-bold">h</span>
-                    <input 
-                      type="number" 
-                      placeholder="M" 
-                      min="0" 
-                      max="59"
-                      className="w-8 bg-white border border-slate-200 rounded-lg px-1 py-1 text-[10px] font-bold focus:outline-none"
-                      value={agendaMinutes}
-                      onChange={(e) => setAgendaMinutes(e.target.value)}
-                    />
-                    <span className="text-[8px] text-slate-400 font-bold">p</span>
-                  </div>
-                </td>
-                <td className="px-3 py-4">
-                  <input 
-                    autoFocus
-                    type="text" 
-                    placeholder="Công việc..."
-                    className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-[10px] focus:outline-none"
-                    value={agendaInput}
-                    onChange={(e) => setAgendaInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && addAgendaItem(itemId, itemType)}
-                  />
-                </td>
-                <td className="px-3 py-4">
-                  <textarea 
-                    placeholder="Nội dung chi tiết..."
-                    className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-[10px] focus:outline-none min-h-[40px] resize-none"
-                    value={agendaDetails}
-                    onChange={(e) => setAgendaDetails(e.target.value)}
-                  />
-                </td>
-                <td className="px-3 py-4">
-                  <p className="text-[8px] text-slate-400 italic">Thêm tệp sau khi lưu mục này</p>
-                </td>
-                <td className="px-3 py-4">
-                  <div className="flex gap-1">
-                    <button onClick={() => addAgendaItem(itemId, itemType)} className={cn("p-1.5 text-white rounded-lg", `bg-${accentColor}`)}>
-                      <Plus className="w-4 h-4" />
-                    </button>
-                    <button onClick={() => { setActiveItemId(null); setAgendaInput(''); setAgendaDuration(''); setAgendaDetails(''); }} className="p-1.5 text-slate-400">
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-        {!activeItemId && isOwner && showAddButton && (
-          <div className="p-4 flex justify-center border-t border-slate-50 bg-slate-50/30">
-             <button 
-               onClick={() => setActiveItemId(itemId)}
-               className={cn("flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all hover:scale-105 active:scale-95 shadow-lg", `bg-${accentColor} text-white shadow-${accentColor}/20`)}
-             >
-               <Plus className="w-4 h-4" /> Thêm
-             </button>
-          </div>
-        )}
-      </div>
-    );
-  };
-
   const renderDashboard = () => (
     <div className="lg:col-span-9">
       <div className="bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden">
@@ -991,7 +613,7 @@ export default function App() {
 
               const dayItems = [
                 ...dayEvents.map(e => ({ ...e, type: 'event' as const, time: e.start })),
-                ...dayTasksForCalendar.map(t => ({ id: t.id, title: t.title, type: 'task' as const, completed: t.completed, tag: t.tag, time: t.date }))
+                ...dayTasksForCalendar.map(t => ({ id: t.id, title: t.title, type: 'task' as const, completed: isTaskCompleted(t, day), tag: t.tag, time: t.date }))
               ].sort((a, b) => a.time.getTime() - b.time.getTime());
 
               return (
@@ -1040,8 +662,14 @@ export default function App() {
     </div>
   );
 
-  const renderChecklist = () => (
-    <div className="lg:col-span-9 grid grid-cols-1 md:grid-cols-2 gap-8">
+  const renderChecklist = () => {
+    const allDayItems = [
+      ...dayEvents.map(e => ({ ...e, type: 'event' as const, time: e.start })),
+      ...dayTasks.map(t => ({ ...t, type: 'task' as const, time: t.date }))
+    ].sort((a, b) => a.time.getTime() - b.time.getTime());
+
+    return (
+      <div className="lg:col-span-9 grid grid-cols-1 md:grid-cols-2 gap-8">
       <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-xl">
         <div className="flex items-center justify-between mb-8">
           <div>
@@ -1072,61 +700,73 @@ export default function App() {
         </div>
         <div className="space-y-4">
           <AnimatePresence mode="popLayout">
-            {dayTasks.map(task => {
+            {allDayItems.map(item => {
+              const isTask = item.type === 'task';
+              const isCompleted = isTask ? isTaskCompleted(item as Task, selectedDate) : false;
               let timeStr = '--:--';
               try {
-                if (task.date && !isNaN(task.date.getTime())) {
-                  timeStr = format(task.date, 'HH:mm');
-                }
-              } catch (e) {
-                console.error("Invalid task date", task.date);
-              }
+                 timeStr = format(item.time, 'HH:mm');
+              } catch (e) {}
               
               return (
-                <motion.div layout key={task.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, scale: 0.9 }} className={cn(
-                  "flex items-center gap-4 p-4 rounded-2xl border transition-all group",
-                  task.completed ? "bg-slate-50 border-slate-100 opacity-60" : "bg-white border-slate-100 shadow-sm"
-                )}>
-                  <button 
-                    onClick={() => toggleTask(task)}
-                    className={cn("p-1 transition-all hover:scale-110 active:scale-95", task.completed ? "text-amber-400" : "text-slate-200 hover:text-amber-200")}
-                  >
-                    <Star className={cn("w-6 h-6", task.completed ? "fill-amber-400" : "fill-none")} strokeWidth={2.5} />
-                  </button>
-                  <div className="flex-1">
-                     <div className="text-sm font-bold text-slate-700">
-                       <span className="text-[10px] text-brand-blue font-black mr-2 opacity-50">{timeStr}</span>
-                       {task.title}
-                     </div>
-                   {task.tag && (
-                     <div className={cn(
-                       "inline-block text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md mt-1",
-                       TASK_TAGS.find(t => t.id === task.tag)?.color || "bg-slate-100 text-slate-400"
-                     )}>
-                       {task.tag === 'other' ? (task.customTagLabel || 'Khác') : TASK_TAGS.find(t => t.id === task.tag)?.label}
-                       {task.isFixed && <span className="ml-2 opacity-50 tracking-normal text-[7px] font-medium">(Cố định)</span>}
-                     </div>
-                   )}
-                </div>
-                <div className="flex items-center gap-1">
-                  <button 
-                    onClick={() => startEditing(task)}
-                    className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-brand-blue transition-all"
-                  >
-                    <Pencil className="w-4 h-4" />
-                  </button>
-                  <button 
-                    onClick={() => deleteTask(task.id)}
-                    className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-red-500 transition-all"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </motion.div>
+                <Fragment key={`${item.type}-${item.id}`}>
+                  <motion.div layout initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, scale: 0.9 }} className={cn(
+                    "flex items-center gap-4 p-4 rounded-2xl border transition-all group",
+                    isCompleted ? "bg-slate-50 border-slate-100 opacity-60" : "bg-white border-slate-100 shadow-sm"
+                  )}>
+                    {isTask ? (
+                      <button 
+                        onClick={() => toggleTask(item as Task, selectedDate)}
+                        className={cn("p-1 transition-all hover:scale-110 active:scale-95", isCompleted ? "text-amber-400" : "text-slate-200 hover:text-amber-200")}
+                      >
+                        <Star className={cn("w-6 h-6", isCompleted ? "fill-amber-400" : "fill-none")} strokeWidth={2.5} />
+                      </button>
+                    ) : (
+                      <div className="p-1 text-brand-pink">
+                        <Clock className="w-6 h-6" strokeWidth={2.5} />
+                      </div>
+                    )}
+                    
+                    <div className="flex-1">
+                       <div className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                         <span className="text-[10px] text-brand-blue font-black opacity-50">{timeStr}</span>
+                         {item.title}
+                       </div>
+                     {isTask && (item as Task).tag && (
+                       <div className={cn(
+                         "inline-block text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md mt-1",
+                         TASK_TAGS.find(t => t.id === (item as Task).tag)?.color || "bg-slate-100 text-slate-400"
+                       )}>
+                         {(item as Task).tag === 'other' ? ((item as Task).customTagLabel || 'Khác') : TASK_TAGS.find(t => t.id === (item as Task).tag)?.label}
+                         {(item as Task).isFixed && <span className="ml-2 opacity-50 tracking-normal text-[7px] font-medium">(Cố định)</span>}
+                       </div>
+                     )}
+                     {!isTask && (
+                       <div className="inline-block text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md mt-1 bg-brand-pink/10 text-brand-pink border border-brand-pink/20">
+                         Sự kiện
+                       </div>
+                     )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button 
+                      onClick={() => isTask ? startEditing(item as Task) : startEditingEvent(item as Event)}
+                      className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-brand-blue transition-all"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button 
+                      onClick={() => isTask ? deleteTask(item.id) : deleteEvent(item.id)}
+                      className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-red-500 transition-all"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </motion.div>
+              </Fragment>
               );
             })}
           </AnimatePresence>
-          {dayTasks.length === 0 && (
+          {allDayItems.length === 0 && (
             <div className="text-center py-10">
               <p className="text-slate-300 text-sm italic mb-4">Hôm nay chưa có lịch trình...</p>
               <button 
@@ -1185,7 +825,8 @@ export default function App() {
         </div>
       </div>
     </div>
-  );
+    );
+  };
 
   const renderPlanner = () => (
     <div className="lg:col-span-9">
@@ -1311,6 +952,16 @@ export default function App() {
                 <div className="p-1.5 bg-slate-50 rounded-lg">
                    <Share2 className="w-3 h-3 text-slate-400" />
                 </div>
+              </div>
+
+              <div className="pt-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2 block font-black">Mô tả tổng quát</label>
+                  <textarea 
+                    value={sharedNoteInput}
+                    onChange={(e) => setSharedNoteInput(e.target.value)}
+                    placeholder="Ghi chú nhanh cho kế hoạch này..."
+                    className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-3 text-xs font-medium focus:outline-none focus:border-brand-blue/50 shadow-sm h-[80px] resize-none"
+                  />
               </div>
             </div>
           </div>
@@ -1464,7 +1115,7 @@ export default function App() {
                 {(() => {
                   const dayDate = parseLocalDate(plannerDate) || new Date();
                   const dayTasksList = tasks.filter(t => 
-                    !t.completed && (
+                    !isTaskCompleted(t, dayDate) && (
                       isSameDay(t.date, dayDate) || 
                       (t.isFixed && t.date.getDay() === dayDate.getDay() && startOfDay(t.date) <= startOfDay(dayDate) && (!t.fixedUntil || startOfDay(dayDate) <= startOfDay(t.fixedUntil)))
                     )
@@ -1507,600 +1158,406 @@ export default function App() {
                       </div>
                     </div>
                   )) : (
-                    <div className="text-center py-10 opacity-30 italic text-sm">Chưa có kế hoạch nào được lập cho ngày này...</div>
+                    <p className="text-[10px] text-slate-300 italic font-bold uppercase tracking-widest text-center py-4 bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">Không có công việc nào...</p>
                   );
                 })()}
               </div>
-           </div>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
 
-  const renderShared = () => (
-    <div className="lg:col-span-9 space-y-8">
-      <div className="bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden">
-        <div className="p-8 bg-slate-900 text-white border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            {sharedDetailDay && (
-              <button 
-                onClick={() => setSharedDetailDay(null)}
-                className="w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/20 rounded-xl transition-all"
-              >
-                <ChevronLeft className="w-5 h-5 text-white" />
-              </button>
-            )}
-            <div>
-              <h2 className="text-3xl font-black tracking-tight">
-                {sharedDetailDay ? `Chi tiết: ${format(sharedDetailDay, 'dd/MM/yyyy')}` : 'Shared Schedule'}
-              </h2>
-              <p className="text-slate-400 text-sm font-medium mt-1">
-                {sharedDetailDay ? 'Lên kế hoạch cụ thể cho ngày này' : 'Lên kế hoạch và gửi gắm những lời nhắn nhủ.'}
-              </p>
+  const renderShared = () => {
+    if (!sharingRoom) {
+      return (
+        <div className="lg:col-span-9 h-[600px] flex items-center justify-center p-8">
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }} 
+            animate={{ opacity: 1, y: 0 }} 
+            className="w-full max-w-md bg-white rounded-[2.5rem] border border-slate-100 shadow-2xl p-10 text-center"
+          >
+            <div className="w-20 h-20 bg-brand-blue/10 text-brand-blue rounded-3xl flex items-center justify-center mx-auto mb-6">
+              <Users className="w-10 h-10" />
             </div>
-          </div>
-          <div className="hidden md:flex items-center gap-2 bg-white/10 p-1 rounded-2xl border border-white/10">
-            <button 
-              onClick={() => { setSharedCalendarView('month'); setSharedDetailDay(null); }}
-              className={cn(
-                "px-4 py-2 text-xs font-black uppercase tracking-widest transition-all rounded-xl",
-                sharedCalendarView === 'month' && !sharedDetailDay ? "bg-white text-slate-900" : "text-white/60 hover:text-white"
-              )}
-            >
-              Tháng
-            </button>
-            <button 
-              onClick={() => { setSharedCalendarView('week'); setSharedDetailDay(null); }}
-              className={cn(
-                "px-4 py-2 text-xs font-black uppercase tracking-widest transition-all rounded-xl",
-                sharedCalendarView === 'week' && !sharedDetailDay ? "bg-white text-slate-900" : "text-white/60 hover:text-white"
-              )}
-            >
-              Tuần
-            </button>
-          </div>
-        </div>
-        
-        {user && !isGuestView && (
-          <div className="p-8 border-b border-slate-100 bg-slate-50/50">
-            <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-6">
-              Thêm lịch trình chia sẻ ({(() => {
-                const d = sharedDetailDay || selectedDate;
-                if (d && !isNaN(d.getTime())) return format(d, 'dd/MM');
-                return '--/--';
-              })()})
-            </h3>
+            <h2 className="text-3xl font-black text-slate-800 mb-2">Phòng Chia Sẻ</h2>
+            <p className="text-slate-500 text-sm font-medium mb-8">
+              Tham gia hoặc tạo một không gian làm việc chung để lên kế hoạch cùng đồng đội, gia đình hoặc bạn bè.
+            </p>
             
-            <div className="flex items-center gap-2 mb-6 p-1 bg-slate-200 rounded-2xl w-fit">
+            <div className="space-y-4">
+              <div className="relative">
+                <input 
+                  type="text" 
+                  value={roomInput}
+                  onChange={(e) => setRoomInput(e.target.value)}
+                  placeholder="Nhập mã phòng (ví dụ: TEAM_2024)"
+                  className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-6 py-4 text-sm font-bold focus:outline-none focus:border-brand-blue transition-all"
+                />
+                <button 
+                  onClick={() => setSharingRoom(roomInput.trim().toUpperCase())}
+                  disabled={!roomInput.trim()}
+                  className="mt-4 w-full py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg active:scale-95 disabled:opacity-50"
+                >
+                  Vào Phòng
+                </button>
+              </div>
+              
+              <div className="pt-4 flex items-center gap-4">
+                <div className="h-px bg-slate-100 flex-1"></div>
+                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Hoặc</span>
+                <div className="h-px bg-slate-100 flex-1"></div>
+              </div>
+              
               <button 
-                onClick={() => setIsSharedItemTask(false)}
-                className={cn(
-                  "px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
-                  !isSharedItemTask ? "bg-white text-brand-pink shadow-sm" : "text-slate-400 hover:text-slate-600"
-                )}
+                onClick={() => {
+                  const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+                  setSharingRoom(code);
+                }}
+                className="w-full py-4 bg-white border-2 border-slate-100 text-slate-600 rounded-2xl font-black uppercase tracking-widest hover:bg-slate-50 transition-all active:scale-95"
               >
-                Sự kiện
-              </button>
-              <button 
-                onClick={() => setIsSharedItemTask(true)}
-                className={cn(
-                  "px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
-                  isSharedItemTask ? "bg-white text-brand-blue shadow-sm" : "text-slate-400 hover:text-slate-600"
-                )}
-              >
-                Công việc
+                Tạo Phòng Mới
               </button>
             </div>
+          </motion.div>
+        </div>
+      );
+    }
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-4">
-                <div>
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2 block">Tên {isSharedItemTask ? 'công việc' : 'sự kiện'}</label>
+    return (
+      <div className="lg:col-span-9 space-y-8">
+        <div className="bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden">
+          <div className="p-8 bg-slate-900 text-white border-b border-slate-800 flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              {sharedDetailDay ? (
+                <button 
+                  onClick={() => setSharedDetailDay(null)}
+                  className="w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/20 rounded-xl transition-all"
+                >
+                  <ChevronLeft className="w-5 h-5 text-white" />
+                </button>
+              ) : (
+                <button 
+                  onClick={() => setSharingRoom('')}
+                  className="w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/20 rounded-xl transition-all"
+                >
+                  <LogOut className="w-5 h-5 text-white" />
+                </button>
+              )}
+              <div>
+                <h2 className="text-3xl font-black tracking-tight flex items-center gap-3">
+                  {sharedDetailDay ? `Kế hoạch ${format(sharedDetailDay, 'dd/MM')}` : (
+                    <>
+                      <span>Phòng: {sharingRoom}</span>
+                      <button 
+                        onClick={() => {
+                          const url = `${window.location.origin}${window.location.pathname}?view=shared&room=${sharingRoom}`;
+                          navigator.clipboard.writeText(url);
+                          alert('Đã sao chép link mời vào phòng!');
+                        }}
+                        className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-all"
+                      >
+                        <Share2 className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
+                </h2>
+                <p className="text-slate-400 text-sm font-medium mt-1">
+                  {sharedDetailDay ? 'Chi tiết các đầu việc chung cho ngày này' : 'Không gian làm việc chung. Chỉ những người có mã phòng mới có thể truy cập.'}
+                </p>
+              </div>
+            </div>
+            {!sharedDetailDay && (
+              <div className="hidden md:flex items-center gap-2 bg-white/10 p-1 rounded-2xl border border-white/10">
+                <button 
+                  onClick={() => setSharedCalendarView('month')}
+                  className={cn(
+                    "px-4 py-2 text-xs font-black uppercase tracking-widest transition-all rounded-xl",
+                    sharedCalendarView === 'month' ? "bg-white text-slate-900" : "text-white/60 hover:text-white"
+                  )}
+                >
+                  Tháng
+                </button>
+                <button 
+                  onClick={() => setSharedCalendarView('week')}
+                  className={cn(
+                    "px-4 py-2 text-xs font-black uppercase tracking-widest transition-all rounded-xl",
+                    sharedCalendarView === 'week' ? "bg-white text-slate-900" : "text-white/60 hover:text-white"
+                  )}
+                >
+                  Tuần
+                </button>
+              </div>
+            )}
+          </div>
+          
+          {user && !isGuestView && (
+            <div className="p-8 border-b border-slate-100 bg-slate-50/50">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest">
+                  {sharedDetailDay ? 'Thêm kế hoạch cho ngày này' : 'Dự định sắp tới'}
+                </h3>
+                <div className="flex items-center gap-2 p-1 bg-slate-200 rounded-2xl">
+                  <button onClick={() => setIsSharedItemTask(false)} className={cn("px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all", !isSharedItemTask ? "bg-white text-brand-pink shadow-sm" : "text-slate-400")}>Sự kiện</button>
+                  <button onClick={() => setIsSharedItemTask(true)} className={cn("px-4 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all", isSharedItemTask ? "bg-white text-brand-blue shadow-sm" : "text-slate-400")}>Việc làm</button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-4">
                   <input 
                     type="text" 
                     value={newEventTitle}
                     onChange={(e) => setNewEventTitle(e.target.value)}
-                    placeholder={isSharedItemTask ? "Ví dụ: Hoàn thiện report..." : "Ví dụ: Đi ăn tối cùng nhau..."}
-                    className="w-full bg-white border border-slate-200 rounded-2xl px-5 py-3 text-sm font-bold focus:outline-none focus:border-slate-400"
+                    placeholder={isSharedItemTask ? "Tên công việc cần làm chung..." : "Tên sự kiện sắp tới..."}
+                    className="w-full bg-white border border-slate-200 rounded-2xl px-5 py-3 text-sm font-bold focus:outline-none focus:ring-2 ring-brand-blue/5"
                   />
-                </div>
-                {!sharedDetailDay && (
                   <div className="flex gap-4">
+                    {!sharedDetailDay && (
+                      <div className="flex-1">
+                        <input 
+                          type="date" 
+                          value={format(selectedDate, 'yyyy-MM-dd')}
+                          onChange={(e) => {
+                            const d = new Date(e.target.value);
+                            if (!isNaN(d.getTime())) setSelectedDate(d);
+                          }}
+                          className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none"
+                        />
+                      </div>
+                    )}
                     <div className="flex-1">
-                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2 block">Ngày</label>
                       <input 
-                        type="date" 
-                        value={format(selectedDate, 'yyyy-MM-dd')}
-                        onChange={(e) => {
-                          const d = new Date(e.target.value);
-                          if (!isNaN(d.getTime())) setSelectedDate(d);
-                        }}
-                        className="w-full bg-white border border-slate-200 rounded-2xl px-5 py-3 text-sm font-bold focus:outline-none"
+                        type="time" 
+                        value={plannerTime}
+                        onChange={(e) => setPlannerTime(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-3 text-sm font-bold focus:outline-none"
                       />
                     </div>
                   </div>
-                )}
-                <div className="flex-1">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2 block">Giờ</label>
-                  <input 
-                    type="time" 
-                    value={plannerTime}
-                    onChange={(e) => setPlannerTime(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-2xl px-5 py-3 text-sm font-bold focus:outline-none"
-                  />
                 </div>
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2 block">Lời nhắn gửi kèm</label>
+                <div className="space-y-4">
                   <textarea 
                     value={sharedNoteInput}
                     onChange={(e) => setSharedNoteInput(e.target.value)}
-                    placeholder="Chờ bạn ở chỗ cũ nhé..."
-                    className="w-full bg-white border border-slate-200 rounded-2xl px-5 py-3 text-sm font-medium focus:outline-none h-[116px] resize-none mb-4"
+                    placeholder="Ghi chú nhanh cho đồng đội..."
+                    className="w-full bg-white border border-slate-200 rounded-2xl px-5 py-3 text-sm font-medium focus:outline-none h-[100px] resize-none"
                   />
-                  
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-3 p-4 bg-white border border-slate-100 rounded-2xl">
-                      <button 
-                        onClick={() => setIsFixed(!isFixed)}
-                        className={cn(
-                          "w-10 h-6 rounded-full transition-all relative",
-                          isFixed ? "bg-brand-blue" : "bg-slate-200"
-                        )}
-                      >
-                         <div className={cn(
-                           "absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-all",
-                           isFixed ? "translate-x-4" : "translate-x-0"
-                         )} />
-                      </button>
-                      <div className="flex-1">
-                         <p className="text-[10px] font-black uppercase tracking-widest text-slate-800">Lịch cố định</p>
-                         <p className="text-[9px] text-slate-400 font-medium">Lặp lại mỗi thứ {(() => {
-                           const d = sharedDetailDay || selectedDate;
-                           const dayNames = ['Chủ nhật', 'Hai', 'Ba', 'Tư', 'Năm', 'Sáu', 'Bảy'];
-                           return dayNames[d.getDay()];
-                         })()} hàng tuần.</p>
-                      </div>
-                    </div>
-
-                    {isFixed && (
-                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="space-y-2">
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest block">Đến ngày</label>
-                        <input 
-                          type="date" 
-                          value={fixedUntilDate}
-                          onChange={(e) => setFixedUntilDate(e.target.value)}
-                          className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2 text-xs font-bold focus:outline-none focus:border-brand-blue/50"
-                        />
-                      </motion.div>
-                    )}
-                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* In-form Agenda Builder */}
-            {sharedDetailDay && (
-              <div className="mt-8 bg-white border border-slate-200 rounded-[2rem] p-8 shadow-sm overflow-hidden anim-pop">
-                <div className="flex items-center justify-between mb-6">
-                  <div>
-                    <h4 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
-                      <List className="w-4 h-4 text-brand-blue" /> Agenda cho {isSharedItemTask ? 'công việc' : 'sự kiện'}
-                    </h4>
-                    <p className="text-[10px] text-slate-400 font-bold mt-1 uppercase tracking-tighter">Lập kế hoạch tiết tấu cho hoạt động của bạn</p>
-                  </div>
-                  {tempAgenda.length > 0 && (
-                    <span className="bg-slate-100 text-slate-500 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest">
-                      {tempAgenda.length} mục
-                    </span>
+              <div className="mt-6 flex justify-end">
+                <button 
+                  onClick={async () => {
+                    if (!newEventTitle.trim()) return;
+                    const baseDate = sharedDetailDay || selectedDate;
+                    const finalDate = new Date(format(baseDate, 'yyyy-MM-dd') + 'T' + plannerTime);
+                    
+                    try {
+                      if (isSharedItemTask) {
+                        await addTask(finalDate, 'work', true, newEventTitle.trim());
+                      } else {
+                        await addEvent(finalDate, finalDate, newEventTitle.trim(), 'pink', true);
+                      }
+                      setNewEventTitle('');
+                      setSharedNoteInput('');
+                      alert('Đã thêm kế hoạch chung!');
+                    } catch (err) {
+                      console.error("Error adding shared item:", err);
+                    }
+                  }}
+                  className={cn(
+                    "px-10 py-3 text-slate-800 rounded-2xl text-[11px] font-black uppercase tracking-widest shadow-xl hover:scale-105 active:scale-95 transition-all",
+                    isSharedItemTask ? "bg-brand-blue shadow-brand-blue/20" : "bg-brand-pink shadow-brand-pink/20"
                   )}
-                </div>
-
-                <div className="overflow-x-auto mb-6">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-50 text-slate-400 font-black uppercase tracking-widest text-[10px]">
-                        <th className="px-3 py-3 w-10">STT</th>
-                        <th className="px-3 py-3 w-32">Thời lượng</th>
-                        <th className="px-3 py-3 min-w-[150px]">Công việc</th>
-                        <th className="px-3 py-3 min-w-[150px]">Chi tiết</th>
-                        <th className="px-3 py-3 w-32">Đính kèm</th>
-                        <th className="px-3 py-3 w-10"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tempAgenda.map((item, i) => (
-                        <tr key={item.id} className="border-b border-slate-50 group">
-                          <td className="px-3 py-4 text-slate-400 font-bold">{i + 1}</td>
-                          <td className="px-3 py-4 text-slate-600 font-bold">{item.duration || '-'}</td>
-                          <td className="px-3 py-4 text-slate-800 font-extrabold">{item.text}</td>
-                          <td className="px-3 py-4 text-slate-500 italic text-[11px] font-medium leading-relaxed">{item.details || '-'}</td>
-                          <td className="px-3 py-4">
-                             <div className="space-y-1">
-                                {item.attachments?.map(att => (
-                                  <div key={att.id} className="group/att">
-                                    <div className="flex items-center gap-1 text-[8px] font-black bg-slate-50 border border-slate-100 p-1 rounded-md text-slate-600">
-                                       <Paperclip className="w-2 h-2 shrink-0" />
-                                       <span className="truncate">{att.name}</span>
-                                    </div>
-                                  </div>
-                                ))}
-                                {attachingToId === item.id ? (
-                                  <div className="p-2 space-y-2 bg-slate-50 rounded-lg border border-slate-200">
-                                    <input 
-                                      type="text" 
-                                      placeholder="Tên..." 
-                                      className="w-full p-1.5 bg-white border border-slate-200 rounded text-[8px] focus:outline-none" 
-                                      value={newAttName} 
-                                      onChange={(e) => setNewAttName(e.target.value)}
-                                    />
-                                    <input 
-                                      type="text" 
-                                      placeholder="Link..." 
-                                      className="w-full p-1.5 bg-white border border-slate-200 rounded text-[8px] focus:outline-none" 
-                                      value={newAttUrl} 
-                                      onChange={(e) => setNewAttUrl(e.target.value)}
-                                    />
-                                    <div className="flex gap-1 justify-end">
-                                      <button 
-                                        onClick={() => {
-                                          if (!newAttName || !newAttUrl) return;
-                                          addAttachmentToTempAgenda(item.id, { name: newAttName, url: newAttUrl, type: 'link' });
-                                          setNewAttName('');
-                                          setNewAttUrl('');
-                                          setAttachingToId(null);
-                                        }}
-                                        className={cn("px-2 py-0.5 rounded text-slate-800 text-[7px] font-black uppercase tracking-widest", isSharedItemTask ? "bg-brand-blue" : "bg-brand-pink")}
-                                      >
-                                        Ok
-                                      </button>
-                                      <button onClick={() => setAttachingToId(null)} className="px-2 py-0.5 bg-white border border-slate-200 rounded text-slate-400 text-[7px] font-bold">X</button>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <button onClick={() => setAttachingToId(item.id)} className="text-[10px] text-slate-400 hover:text-brand-blue font-black uppercase tracking-widest flex items-center gap-1 bg-slate-50 border border-slate-100 px-2 py-1 rounded-md transition-colors">
-                                    <Plus className="w-3 h-3" /> Tệp
-                                  </button>
-                                )}
-                             </div>
-                          </td>
-                          <td className="px-3 py-4">
-                            <button 
-                              onClick={() => setTempAgenda(tempAgenda.filter(a => a.id !== item.id))}
-                              className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                      <tr className="bg-slate-50/50">
-                        <td className="px-3 py-4"></td>
-                        <td className="px-3 py-4">
-                          <div className="flex items-center gap-1">
-                            <input 
-                              type="number" 
-                              placeholder="0" 
-                              min="0"
-                              className="w-12 bg-white border border-slate-200 rounded-xl px-2 py-2 text-xs font-bold focus:outline-none focus:border-slate-300"
-                              value={agendaHours}
-                              onChange={(e) => setAgendaHours(e.target.value)}
-                            />
-                            <span className="text-[10px] text-slate-400 font-bold">h</span>
-                            <input 
-                              type="number" 
-                              placeholder="0" 
-                              min="0" 
-                              max="59"
-                              className="w-12 bg-white border border-slate-200 rounded-xl px-2 py-2 text-xs font-bold focus:outline-none focus:border-slate-300"
-                              value={agendaMinutes}
-                              onChange={(e) => setAgendaMinutes(e.target.value)}
-                            />
-                            <span className="text-[10px] text-slate-400 font-bold">p</span>
-                          </div>
-                        </td>
-                        <td className="px-3 py-4">
-                          <input 
-                            type="text" 
-                            placeholder="Hoạt động gì..."
-                            value={agendaInput}
-                            onChange={(e) => setAgendaInput(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && addToTempAgenda()}
-                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-black focus:outline-none focus:border-slate-300"
-                          />
-                        </td>
-                        <td className="px-3 py-4">
-                          <textarea 
-                            placeholder="Mô tả chi tiết..."
-                            value={agendaDetails}
-                            onChange={(e) => setAgendaDetails(e.target.value)}
-                            className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-slate-300 min-h-[40px] resize-none"
-                          />
-                        </td>
-                        <td className="px-3 py-4"></td>
-                        <td className="px-3 py-4">
-                           <button 
-                             onClick={addToTempAgenda}
-                             className={cn("px-4 py-2 text-slate-800 rounded-xl shadow-lg shadow-brand-blue/20 transition-all active:scale-95 flex items-center gap-2 text-xs font-black uppercase tracking-widest outline-none", isSharedItemTask ? "bg-brand-blue" : "bg-brand-pink")}
-                           >
-                             <Plus className="w-4 h-4" /> Thêm
-                           </button>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
+                >
+                  Thêm vào Phòng
+                </button>
               </div>
-            )}
-
-            <div className="mt-8 px-8 pb-8">
-              <button 
-                onClick={async () => {
-                   if (!newEventTitle.trim()) return;
-                   const baseDate = sharedDetailDay || selectedDate;
-                   const finalDate = new Date(format(baseDate, 'yyyy-MM-dd') + 'T' + plannerTime);
-                   
-                   try {
-                     if (isSharedItemTask) {
-                       await addTask(finalDate, 'work', true, newEventTitle.trim(), tempAgenda);
-                     } else {
-                       setSelectedDate(finalDate);
-                       await addEvent(finalDate, finalDate, newEventTitle.trim(), 'pink', true, tempAgenda);
-                     }
-                     // Clear state
-                     setNewEventTitle('');
-                     setSharedNoteInput('');
-                     setTempAgenda([]);
-                     setAgendaInput('');
-                     setAgendaHours('');
-                     setAgendaMinutes('');
-                     setAgendaDetails('');
-                     setAgendaDuration('');
-                     setActiveItemId(null);
-                   } catch (err) {
-                     console.error("Error adding shared item:", err);
-                   }
-                }}
-                className={cn(
-                  "w-full py-4 text-slate-800 rounded-2xl text-[13px] font-black uppercase tracking-[0.2em] shadow-xl hover:scale-[1.01] active:scale-95 transition-all outline-none",
-                  isSharedItemTask ? "bg-brand-blue shadow-brand-blue/30" : "bg-brand-pink shadow-brand-pink/30"
-                )}
-              >
-                Xác nhận Thêm {isSharedItemTask ? 'công việc' : 'sự kiện'}
-              </button>
             </div>
-          </div>
-        )}
+          )}
 
-        {sharedDetailDay ? (
-          <div className="p-8 space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-               <div className="space-y-4">
-                  <h4 className="text-xs font-black uppercase tracking-widest text-slate-400">Sự kiện chung</h4>
-                  <div className="space-y-3">
-                    {allSharedEvents
-                      .filter(e => isSameDay(e.start, sharedDetailDay))
-                      .sort((a, b) => a.start.getTime() - b.start.getTime())
-                      .map(e => (
-                      <div key={e.id} className="p-5 bg-brand-pink/5 border border-brand-pink/10 rounded-2xl relative group">
-                        {user?.uid === e.ownerId && (
-                           <button onClick={() => deleteEvent(e.id)} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-brand-pink hover:bg-brand-pink/10 p-1 rounded-lg transition-all">
-                              <Trash2 className="w-3 h-3" />
-                           </button>
-                        )}
-                        <p className="text-[10px] font-black text-brand-pink uppercase tracking-widest mb-1">{format(e.start, 'HH:mm')}</p>
-                        <p className="font-bold text-slate-800 text-lg mb-1">{e.title}</p>
-                        
-                        {/* Agenda for Events */}
-                        <div className="mb-2">
-                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest bg-slate-50 px-2 py-1 rounded-md border border-slate-100">
-                             Lịch trình chi tiết
-                          </span>
-                        </div>
-                        {renderAgendaTable(e.id, 'event', e.agenda || [], e.ownerId)}
-
-                        {e.sharedNote && <p className="mt-4 p-3 bg-white/50 rounded-xl text-xs text-slate-500 italic border border-slate-100">{e.sharedNote}</p>}
-                      </div>
-                    ))}
-                    {allSharedEvents.filter(e => isSameDay(e.start, sharedDetailDay)).length === 0 && (
-                      <p className="text-xs text-slate-400 italic text-center py-8 border border-dashed border-slate-200 rounded-2xl">Không có sự kiện nào...</p>
-                    )}
-                  </div>
-               </div>
-                <div className="space-y-4">
-                  <h4 className="text-xs font-black uppercase tracking-widest text-slate-400">Công việc chung</h4>
-                  <div className="space-y-3">
-                    {(() => {
-                      const daySharedTasksList = allSharedTasks
-                        .filter(t => 
-                          isSameDay(t.date, sharedDetailDay) || 
-                          (t.isFixed && (t.date.getDay() === sharedDetailDay.getDay()) && startOfDay(t.date) <= startOfDay(sharedDetailDay) && (!t.fixedUntil || startOfDay(sharedDetailDay) <= startOfDay(t.fixedUntil)))
-                        )
-                        .sort((a, b) => a.date.getTime() - b.date.getTime());
-                      
-                      return (
-                        <>
-                          {daySharedTasksList.map(t => (
-                            <div key={t.id} className="p-5 bg-brand-blue/5 border border-brand-blue/10 rounded-2xl relative group">
-                              {user?.uid === t.ownerId && (
-                                 <button onClick={() => deleteTask(t.id)} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-brand-blue hover:bg-brand-blue/10 p-1 rounded-lg transition-all">
-                                    <Trash2 className="w-3 h-3" />
-                                 </button>
-                              )}
-                              <div className="flex items-start gap-3 mb-3">
-                                <button 
-                                  onClick={() => toggleTask(t)}
-                                  className={cn(
-                                    "mt-1 p-1 transition-all hover:scale-110 active:scale-95", 
-                                    t.completed ? "text-amber-400" : "text-slate-200 hover:text-amber-200"
-                                  )}
-                                >
-                                  <Star className={cn("w-5 h-5", t.completed ? "fill-amber-400" : "fill-none")} strokeWidth={2.5} />
-                                </button>
-                                <div>
-                                  <p className="text-[10px] font-black text-brand-blue uppercase tracking-widest mb-1">{format(t.date, 'HH:mm')}</p>
-                                  <p className={cn("font-bold text-slate-800 text-lg", t.completed && "line-through opacity-50")}>{t.title}</p>
-                                </div>
-                              </div>
-
-                              {/* Agenda for Tasks */}
-                              <div className="mb-2">
-                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest bg-slate-50 px-2 py-1 rounded-md border border-slate-100">
-                                   Lịch trình chi tiết
+          {sharedDetailDay ? (
+            <div className="p-8 space-y-8 animate-in fade-in slide-in-from-bottom-5">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                 {/* Events Section */}
+                 <div>
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="w-1.5 h-6 bg-brand-pink rounded-full"></div>
+                      <h4 className="text-sm font-black uppercase tracking-widest text-slate-800 text-pink-600">Sự kiện chung</h4>
+                    </div>
+                    <div className="space-y-4">
+                       {allSharedEvents
+                        .filter(e => isSameDay(e.start, sharedDetailDay))
+                        .sort((a,b) => a.start.getTime() - b.start.getTime())
+                        .map(e => (
+                          <div key={e.id} className="p-6 bg-white border border-slate-100 rounded-[2rem] shadow-sm hover:shadow-md transition-all group">
+                            <div className="flex justify-between items-start mb-4">
+                              <div className="flex items-center gap-3">
+                                <span className="bg-brand-pink/10 text-brand-pink text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest">
+                                  {format(e.start, 'HH:mm')}
                                 </span>
+                                <h5 className="font-bold text-slate-800 text-lg">{e.title}</h5>
                               </div>
-                              {renderAgendaTable(t.id, 'task', t.agenda || [], t.ownerId)}
-                              
-                              {t.sharedNote && <p className="mt-4 p-3 bg-white/50 rounded-xl text-xs text-slate-500 italic border border-slate-100">{t.sharedNote}</p>}
+                              <button onClick={() => deleteEvent(e.id)} className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-red-500 rounded-lg hover:bg-red-50 transition-all">
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
-                          ))}
-                          {daySharedTasksList.length === 0 && (
-                            <p className="text-xs text-slate-400 italic text-center py-8 border border-dashed border-slate-200 rounded-2xl">Không có công việc nào...</p>
-                          )}
-                        </>
-                      );
-                    })()}
-                  </div>
-               </div>
-            </div>
-          </div>
-        ) : sharedCalendarView === 'month' ? (
-          <div className="p-4">
-            <div className="calendar-grid mb-2">
-              {weekDays.map(day => (
-                <div key={day} className="text-center py-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-300">{day}</div>
-              ))}
-            </div>
-            <div className="calendar-grid">
-              {calendarDays.map((day, idx) => {
-                const isCurrentMonth = isSameMonth(day, monthStart);
-                const daySharedEvents = allSharedEvents.filter(e => isSameDay(e.start, day));
-                const daySharedTasks = allSharedTasks.filter(t => 
-                  isSameDay(t.date, day) || 
-                  (t.isFixed && t.date.getDay() === day.getDay() && startOfDay(t.date) <= startOfDay(day) && (!t.fixedUntil || startOfDay(day) <= startOfDay(t.fixedUntil)))
-                );
-                
-                const totalTasks = daySharedTasks.length;
-                const completedTasks = daySharedTasks.filter(t => t.completed).length;
-                const completionPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : null;
-
-                return (
-                  <div key={day.toString()} className={cn(
-                    "relative aspect-square p-2 border border-slate-50 cursor-pointer group transition-all",
-                    !isCurrentMonth && "opacity-20 bg-slate-50/10",
-                    isSameDay(day, selectedDate) && "bg-brand-pink/5"
-                  )} onClick={() => { setSelectedDate(day); setSharedDetailDay(day); }}>
-                    <div className="flex items-center justify-between mb-1">
-                      <div className={cn(
-                        "w-6 h-6 flex items-center justify-center rounded-lg text-[10px] font-black tracking-tight",
-                        isDateToday(day) ? "bg-brand-blue text-slate-800" : isSameDay(day, selectedDate) ? "bg-brand-pink text-slate-800" : "text-slate-400"
-                      )}>
-                        {format(day, 'd')}
-                      </div>
-                      {completionPercentage !== null && (
-                        <div className="text-[8px] font-black text-brand-blue bg-brand-blue/20 px-1.5 py-0.5 rounded-full border border-brand-blue/30">
-                          {completionPercentage}%
-                        </div>
-                      )}
-                    </div>
-                    <div className="space-y-1 overflow-y-auto max-h-24 scrollbar-hide">
-                      {(() => {
-                        const dayItems = [
-                          ...daySharedEvents.map(e => ({ ...e, type: 'EV', time: e.start })),
-                          ...daySharedTasks.map(t => ({ ...t, type: 'TK', time: t.date }))
-                        ].sort((a, b) => a.time.getTime() - b.time.getTime());
-                        
-                        return (
-                          <>
-                            {dayItems.slice(0, 8).map((item, i) => (
-                              <div key={i} className={cn(
-                                "text-[9px] p-1 px-1.5 rounded-md font-black truncate shadow-sm text-slate-900 border",
-                                item.type === 'EV' ? "bg-brand-pink border-brand-pink/30" : "bg-brand-blue border-brand-blue/30",
-                                (item as any).completed && "line-through opacity-50 bg-slate-100 border-slate-200 text-slate-400"
-                              )}>
-                                {item.type}: {item.title}
+                            {e.sharedNote && (
+                              <div className="mt-4 p-4 bg-slate-50 rounded-2xl border-l-4 border-brand-pink/30 flex gap-3">
+                                <MessageSquare className="w-4 h-4 text-brand-pink shrink-0 mt-0.5" />
+                                <p className="text-xs text-slate-500 italic leading-relaxed">{e.sharedNote}</p>
                               </div>
-                            ))}
-                            {dayItems.length > 8 && <div className="text-[8px] text-center text-slate-400 font-bold">+{dayItems.length - 8}</div>}
-                          </>
-                        );
-                      })()}
+                            )}
+                          </div>
+                        ))
+                       }
+                       {allSharedEvents.filter(e => isSameDay(e.start, sharedDetailDay)).length === 0 && (
+                          <div className="py-12 text-center border-2 border-dashed border-slate-100 rounded-[2rem]">
+                            <p className="text-slate-300 font-bold text-sm">Không có sự kiện nào...</p>
+                          </div>
+                       )}
                     </div>
-                  </div>
-                );
-              })}
+                 </div>
+
+                 {/* Tasks Section */}
+                 <div>
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="w-1.5 h-6 bg-brand-blue rounded-full"></div>
+                      <h4 className="text-sm font-black uppercase tracking-widest text-slate-800 text-blue-600">Công việc chung</h4>
+                    </div>
+                    <div className="space-y-4">
+                       {(() => {
+                         const dayTasks = allSharedTasks.filter(t => 
+                           isSameDay(t.date, sharedDetailDay) || 
+                           (t.isFixed && (t.date.getDay() === sharedDetailDay.getDay()) && startOfDay(t.date) <= startOfDay(sharedDetailDay) && (!t.fixedUntil || startOfDay(sharedDetailDay) <= startOfDay(t.fixedUntil)))
+                         ).sort((a,b) => a.date.getTime() - b.date.getTime());
+
+                         return dayTasks.map(t => (
+                           <div key={t.id} className="p-6 bg-white border border-slate-100 rounded-[2rem] shadow-sm hover:shadow-md transition-all group">
+                              <div className="flex justify-between items-start mb-4">
+                                <div className="flex items-center gap-4">
+                                  <button onClick={() => toggleTask(t, sharedDetailDay)} className={cn("p-1 transition-all hover:scale-110", isTaskCompleted(t, sharedDetailDay) ? "text-amber-400" : "text-slate-200")}>
+                                    <Star className={cn("w-6 h-6", isTaskCompleted(t, sharedDetailDay) ? "fill-amber-400" : "fill-none")} strokeWidth={2.5}/>
+                                  </button>
+                                  <div>
+                                    <span className="bg-brand-blue/10 text-brand-blue text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest mb-1 inline-block">
+                                      {format(t.date, 'HH:mm')}
+                                    </span>
+                                    <h5 className={cn("font-bold text-slate-800 text-lg", isTaskCompleted(t, sharedDetailDay) && "line-through opacity-40")}>{t.title}</h5>
+                                  </div>
+                                </div>
+                                <button onClick={() => deleteTask(t.id)} className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-red-500 rounded-lg hover:bg-red-50 transition-all">
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                              {t.sharedNote && (
+                                <div className="mt-4 p-4 bg-slate-50 rounded-2xl border-l-4 border-brand-blue/30 flex gap-3">
+                                  <MessageSquare className="w-4 h-4 text-brand-blue shrink-0 mt-0.5" />
+                                  <p className="text-xs text-slate-500 italic leading-relaxed">{t.sharedNote}</p>
+                                </div>
+                              )}
+                           </div>
+                         ));
+                       })()}
+                       {allSharedTasks.filter(t => isSameDay(t.date, sharedDetailDay)).length === 0 && (
+                          <div className="py-12 text-center border-2 border-dashed border-slate-100 rounded-[2rem]">
+                            <p className="text-slate-300 font-bold text-sm">Không có công việc nào...</p>
+                          </div>
+                       )}
+                    </div>
+                 </div>
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="p-8 overflow-x-auto">
-            <div className="min-w-[1000px]">
-              <div className="grid grid-cols-7 gap-4 mb-4">
+          ) : sharedCalendarView === 'month' ? (
+            <div className="p-4">
+              <div className="calendar-grid mb-2">
                 {weekDays.map(day => (
-                  <div key={day} className="text-center text-[10px] font-black uppercase tracking-widest text-slate-300">{day}</div>
+                  <div key={day} className="text-center py-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-300">{day}</div>
                 ))}
               </div>
-              <div className="grid grid-cols-7 gap-4">
+              <div className="calendar-grid">
+                {calendarDays.map((day, idx) => {
+                  const isCurrentMonth = isSameMonth(day, monthStart);
+                  const daySharedEvents = allSharedEvents.filter(e => isSameDay(e.start, day));
+                  const daySharedTasks = allSharedTasks.filter(t => 
+                    isSameDay(t.date, day) || 
+                    (t.isFixed && t.date.getDay() === day.getDay() && startOfDay(t.date) <= startOfDay(day) && (!t.fixedUntil || startOfDay(day) <= startOfDay(t.fixedUntil)))
+                  );
+                  
+                  const totalTasks = daySharedTasks.length;
+                  const completedTasks = daySharedTasks.filter(t => isTaskCompleted(t, day)).length;
+                  const completionPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : null;
+
+                  return (
+                    <div key={day.toString()} className={cn(
+                      "relative aspect-square p-2 border border-slate-50 cursor-pointer group transition-all",
+                      !isCurrentMonth && "opacity-20 bg-slate-50/10",
+                      isSameDay(day, selectedDate) && "bg-brand-pink/5"
+                    )} onClick={() => { setSelectedDate(day); setSharedDetailDay(day); }}>
+                      <div className="flex items-center justify-between mb-1">
+                        <div className={cn(
+                          "w-6 h-6 flex items-center justify-center rounded-lg text-[10px] font-black tracking-tight",
+                          isDateToday(day) ? "bg-brand-blue text-slate-800 shadow-sm" : "text-slate-400"
+                        )}>
+                          {format(day, 'd')}
+                        </div>
+                        {completionPercentage !== null && (
+                          <div className="text-[8px] font-black text-brand-blue bg-brand-blue/10 px-1.5 py-0.5 rounded-full border border-brand-blue/30">
+                            {completionPercentage}%
+                          </div>
+                        )}
+                      </div>
+                      <div className="space-y-1 overflow-y-auto max-h-24 scrollbar-hide">
+                        {(() => {
+                          const dayItems = [
+                            ...daySharedEvents.map(e => ({ ...e, type: 'EV', time: e.start })),
+                            ...daySharedTasks.map(t => ({ ...t, type: 'TK', time: t.date }))
+                          ].sort((a, b) => a.time.getTime() - b.time.getTime());
+                          
+                          return (
+                            <>
+                              {dayItems.slice(0, 8).map((item, i) => (
+                                <div key={i} className={cn(
+                                  "text-[8px] p-1 px-1.5 rounded-md font-black truncate shadow-sm text-slate-800 border",
+                                  item.type === 'EV' ? "bg-brand-pink border-brand-pink/20" : "bg-brand-blue border-brand-blue/20",
+                                  (isTaskCompleted(item as Task, day)) && "line-through opacity-50 bg-slate-100 border-slate-200 text-slate-400"
+                                )}>
+                                  {item.title}
+                                </div>
+                              ))}
+                              {dayItems.length > 8 && <div className="text-[7px] text-center text-slate-400 font-bold">+{dayItems.length - 8}</div>}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="p-8">
+              {/* Simplified Week View */}
+              <div className="grid grid-cols-1 md:grid-cols-7 gap-4">
                 {(() => {
                   const weekStart = startOfWeek(selectedDate, { weekStartsOn: 1 });
-                  const weekDaysArr = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
-                  return weekDaysArr.map(day => {
+                  return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)).map(day => {
                     const dayEvents = allSharedEvents.filter(e => isSameDay(e.start, day));
                     const dayTasks = allSharedTasks.filter(t => 
                       isSameDay(t.date, day) || 
                       (t.isFixed && t.date.getDay() === day.getDay() && startOfDay(t.date) <= startOfDay(day) && (!t.fixedUntil || startOfDay(day) <= startOfDay(t.fixedUntil)))
                     );
-                    const sortedItems = [
-                      ...dayEvents.map(e => ({ ...e, type: 'EV' as const, time: e.start })),
-                      ...dayTasks.map(t => ({ ...t, type: 'TK' as const, time: t.date }))
-                    ].sort((a, b) => a.time.getTime() - b.time.getTime());
-
-                    const totalTasks = dayTasks.length;
-                    const completedTasks = dayTasks.filter(t => t.completed).length;
-                    const completionPercentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : null;
-
                     return (
-                      <div 
-                        key={day.toString()} 
-                        onClick={() => setSharedDetailDay(day)}
-                        className="min-h-[400px] border border-slate-100 rounded-2xl bg-slate-50/50 p-3 cursor-pointer hover:bg-white hover:shadow-xl transition-all group overflow-hidden"
-                      >
-                        <div className={cn(
-                          "relative p-2 rounded-xl mb-4 transition-all group-hover:scale-105",
-                          isDateToday(day) ? "bg-brand-blue text-slate-800 shadow-lg shadow-brand-blue/20" : "bg-white text-slate-800 shadow-sm border border-slate-100"
-                        )}>
-                          <p className="text-[10px] font-black uppercase tracking-widest">{format(day, 'EEE')}</p>
-                          <p className="text-lg font-black">{format(day, 'd')}</p>
-                          {completionPercentage !== null && (
-                            <div className={cn(
-                              "absolute border top-2 right-2 text-[8px] font-black px-1.5 py-0.5 rounded-full",
-                              isDateToday(day) ? "bg-white/40 border-white/40 text-slate-800" : "bg-brand-blue/10 border-brand-blue/20 text-brand-blue"
-                            )}>
-                              {completionPercentage}%
-                            </div>
-                          )}
-                        </div>
-                        <div className="space-y-3">
-                          {sortedItems.map(item => (
-                            <div key={item.id} className={cn(
-                              "p-3 border rounded-xl shadow-sm text-[10px]",
-                              item.type === 'EV' ? "bg-brand-pink/5 border-brand-pink/10" : "bg-brand-blue/5 border-brand-blue/10"
-                            )}>
-                               <p className={cn(
-                                 "font-black uppercase tracking-widest mb-1",
-                                 item.type === 'EV' ? "text-brand-pink" : "text-brand-blue",
-                                 (item as any).completed && "line-through"
-                               )}>{format(item.time, 'HH:mm')}</p>
-                               <p className={cn("font-bold text-slate-800 mb-2 truncate", (item as any).completed && "line-through opacity-50")}>{item.title}</p>
-                               {item.sharedNote && <p className="p-2 bg-white/50 text-slate-500 rounded-lg italic border border-slate-50 line-clamp-2">{item.sharedNote}</p>}
-                            </div>
-                          ))}
-                          {sortedItems.length === 0 && (
-                             <div className="flex flex-col items-center justify-center pt-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <Plus className="w-5 h-5 text-slate-200 mb-2" />
-                                <p className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Thêm chi tiết</p>
-                             </div>
-                          )}
+                      <div key={day.toString()} onClick={() => { setSelectedDate(day); setSharedDetailDay(day); }} className={cn(
+                        "p-4 rounded-2xl border transition-all cursor-pointer h-full min-h-[150px]",
+                        isDateToday(day) ? "bg-brand-blue/5 border-brand-blue/20 ring-1 ring-brand-blue/20" : "bg-white border-slate-100 hover:border-slate-200"
+                      )}>
+                        <div className="text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] mb-2">{format(day, 'EEEE', { locale: vi })}</div>
+                        <div className="text-xl font-black text-slate-800 mb-4">{format(day, 'd')}</div>
+                        <div className="space-y-1">
+                          {dayEvents.map(e => <div key={e.id} className="text-[8px] font-bold text-brand-pink truncate">• {e.title}</div>)}
+                          {dayTasks.map(t => <div key={t.id} className={cn("text-[8px] font-bold text-brand-blue truncate", isTaskCompleted(t, day) && "line-through opacity-40")}>• {t.title}</div>)}
                         </div>
                       </div>
                     );
@@ -2108,31 +1565,11 @@ export default function App() {
                 })()}
               </div>
             </div>
-          </div>
-        )}
-      </div>
-
-      {!isGuestView && (
-        <div className="bg-gradient-to-br from-brand-pink/10 to-brand-blue/10 p-10 rounded-[3rem] border border-white shadow-xl flex flex-col items-center text-center">
-          <div className="w-16 h-16 bg-white rounded-3xl flex items-center justify-center shadow-xl mb-6">
-            <Share2 className="text-brand-pink w-8 h-8" />
-          </div>
-          <h3 className="text-2xl font-black text-slate-800 mb-2">Chế độ Chia sẻ Hiện vật</h3>
-          <p className="text-slate-500 max-w-md mb-8 font-medium">Link này sẽ cho phép đối phương xem được toàn bộ "Shared Schedule" của bạn. Các tab còn lại vẫn sẽ được bảo mật riêng tư.</p>
-          <button 
-            onClick={() => {
-              const url = window.location.origin + window.location.pathname + '?view=guest';
-              navigator.clipboard.writeText(url);
-              alert('Đã copy link chia sẻ vào clipboard!');
-            }}
-            className="px-10 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-xs shadow-2xl hover:scale-105 active:scale-95 transition-all"
-          >
-             Sao chép Link Chia sẻ
-          </button>
+          )}
         </div>
-      )}
-    </div>
-  );
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-[#FDFCFB] font-sans">
@@ -2186,9 +1623,9 @@ export default function App() {
                   )
                 );
                 const todayEvents = events.filter(e => isSameDay(e.start, today) && (!isGuestView || e.isShared));
-                const completedToday = todayTasks.filter(t => t.completed).length;
+                const completedToday = todayTasks.filter(t => isTaskCompleted(t, today)).length;
                 const totalToday = todayTasks.length;
-                const pendingToday = todayTasks.filter(t => !t.completed).length;
+                const pendingToday = todayTasks.filter(t => !isTaskCompleted(t, today)).length;
                 const progress = totalToday > 0 ? (completedToday / totalToday) * 100 : 0;
 
                 return (
@@ -2229,27 +1666,30 @@ export default function App() {
             <div className="space-y-3">
               {(() => {
                 const today = startOfToday();
+                const limitDate = addDays(today, 2); // Today + 1 day = 2 days total
                 // For regular items, just future ones. 
                 // For fixed items, find the next occurrence relative to today.
                 const nextOccurrences: { id: string, title: string, type: 'task' | 'event', date: Date, color?: string }[] = [];
 
                 events.forEach(e => {
-                  if (isAfter(e.start, today) || isSameDay(e.start, today)) {
+                  if ((isAfter(e.start, today) || isSameDay(e.start, today)) && isBefore(e.start, limitDate)) {
                     nextOccurrences.push({ ...e, type: 'event', date: e.start });
                   }
                 });
 
                 tasks.forEach(t => {
-                   if (!t.completed) {
-                     if (isAfter(t.date, today) || isSameDay(t.date, today)) {
+                   if (isAfter(t.date, today) || isSameDay(t.date, today)) {
+                     if (!isTaskCompleted(t, t.date) && isBefore(t.date, limitDate)) {
                        nextOccurrences.push({ ...t, type: 'task', date: t.date });
-                     } else if (t.isFixed) {
-                       // If in past, find next occurrence
-                       let next = t.date;
-                       while (next < today) {
-                         next = addDays(next, 7);
-                       }
-                       if (!t.fixedUntil || startOfDay(next) <= startOfDay(t.fixedUntil)) {
+                     }
+                   } else if (t.isFixed) {
+                     // If in past, find next occurrence
+                     let next = t.date;
+                     while (next < today) {
+                       next = addDays(next, 7);
+                     }
+                     if (isBefore(next, limitDate) && (!t.fixedUntil || startOfDay(next) <= startOfDay(t.fixedUntil))) {
+                       if (!isTaskCompleted(t, next)) {
                          nextOccurrences.push({ ...t, type: 'task', date: next });
                        }
                      }
@@ -2259,6 +1699,10 @@ export default function App() {
                 const combined = nextOccurrences
                   .sort((a,b) => a.date.getTime() - b.date.getTime())
                   .slice(0, 6);
+
+                if (combined.length === 0) {
+                  return <p className="text-[10px] text-slate-300 italic font-bold uppercase tracking-widest text-center py-4">Trống trải...</p>;
+                }
 
                 return combined.map(item => (
                   <motion.div key={`${item.type}-${item.id}`} whileHover={{ x: 4 }} className={cn(
@@ -2286,7 +1730,6 @@ export default function App() {
                   </motion.div>
                 ));
               })()}
-              {events.filter(e => !isGuestView || e.isShared).length === 0 && tasks.filter(t => !t.completed).length === 0 && <p className="text-[10px] text-slate-300 italic font-bold uppercase tracking-widest text-center py-4">Trống trải...</p>}
             </div>
           </div>
           <div className="bg-gradient-to-br from-brand-blue/20 to-brand-pink/20 p-6 rounded-3xl border border-white/50 shadow-inner">
